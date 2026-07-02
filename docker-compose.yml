@@ -40,7 +40,7 @@ services:
     container_name: personal_analytics_frontend
     restart: always
     ports:
-      - "8501:8501"
+      - "127.0.0.1:8501:8501"
     environment:
       - BACKEND_URL=http://backend:8000
     depends_on:
@@ -61,5 +61,23 @@ services:
     depends_on:
       - backend
 
+  caddy:
+    image: caddy:2-alpine
+    container_name: personal_analytics_proxy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - BASIC_AUTH_HASH=${BASIC_AUTH_HASH}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:

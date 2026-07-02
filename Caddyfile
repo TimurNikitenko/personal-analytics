@@ -1,0 +1,12 @@
+# Caddy Configuration for Personal Analytics System
+# If you don't have a domain name, use http://78.17.109.99
+# If you have a domain name, replace http://78.17.109.99 with your domain (e.g. analytics.timur.com)
+http://78.17.109.99 {
+    basicauth {
+        # Username: timur
+        # The password hash is read dynamically from the environment
+        timur {$BASIC_AUTH_HASH}
+    }
+
+    reverse_proxy frontend:8501
+}
