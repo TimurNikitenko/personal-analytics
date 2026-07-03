@@ -1,5 +1,7 @@
 import os
 import sys
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from unittest.mock import patch, MagicMock
 
 # Add project root to sys.path so we can import telegram_bot
@@ -16,7 +18,8 @@ from telegram_bot.bot import (
     handle_callback,
     handle_step_input,
     PREDEFINED_SUPPLEMENTS,
-    submit_log_session
+    submit_log_session,
+    calculate_streaks
 )
 
 @pytest.fixture(autouse=True)
@@ -199,4 +202,129 @@ def test_sleep_time_formatting(mock_post, mock_send):
     
     assert payload["sleep_start"] == "2026-05-28T23:30:00"
     assert payload["sleep_end"] == "2026-05-28T07:00:00"
+
+
+@patch("telegram_bot.bot.edit_msg")
+@patch("telegram_bot.bot.answer_callback")
+@patch("requests.post")
+def test_sleepq_callback_score(mock_post, mock_answer, mock_edit):
+    chat_id = "12345"
+    callback_query = {
+        "id": "sleepq_cb",
+        "message": {"chat": {"id": chat_id}, "message_id": 999},
+        "data": "sleepq_8"
+    }
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_post.return_value = mock_response
+    
+    handle_callback(callback_query)
+    
+    # Assert Callback answered
+    mock_answer.assert_called_once_with("sleepq_cb", "Оценка: 8")
+    
+    # Assert backend API called with only date and sleep_quality
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args_list[0]
+    payload = kwargs["json"]
+    assert payload["sleep_quality"] == 8
+    assert "date" in payload
+    
+    # Assert message edited to show confirmation
+    mock_edit.assert_called_once()
+    edit_args = mock_edit.call_args_list[0][0]
+    assert "Сохранена оценка качества сна" in edit_args[2]
+
+@patch("telegram_bot.bot.edit_msg")
+@patch("telegram_bot.bot.answer_callback")
+def test_sleepq_callback_skip(mock_answer, mock_edit):
+    chat_id = "12345"
+    callback_query = {
+        "id": "sleepq_cb",
+        "message": {"chat": {"id": chat_id}, "message_id": 999},
+        "data": "sleepq_skip"
+    }
+    
+    handle_callback(callback_query)
+    
+    mock_answer.assert_called_once_with("sleepq_cb", "Пропущено")
+    mock_edit.assert_called_once()
+    edit_args = mock_edit.call_args_list[0][0]
+    assert "пропущена" in edit_args[2]
+
+
+def test_calculate_streaks_logic():
+    # Test with empty logs
+    assert calculate_streaks([]) == (0, 0)
+    
+    # Mock date today and yesterday
+    today_str = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+    yesterday_str = (datetime.now(ZoneInfo("Europe/Moscow")).date() - timedelta(days=1)).isoformat()
+    day_before_str = (datetime.now(ZoneInfo("Europe/Moscow")).date() - timedelta(days=2)).isoformat()
+    four_days_ago_str = (datetime.now(ZoneInfo("Europe/Moscow")).date() - timedelta(days=4)).isoformat()
+    
+    # 1 day active streak (today)
+    logs_1 = [{"date": today_str}]
+    assert calculate_streaks(logs_1) == (1, 1)
+    
+    # 3 days active streak (today, yesterday, day before)
+    logs_3 = [{"date": today_str}, {"date": yesterday_str}, {"date": day_before_str}]
+    assert calculate_streaks(logs_3) == (3, 3)
+    
+    # Broken streak: logged yesterday, day before, and 4 days ago. 
+    # Current streak = 2 (today not logged but yesterday was logged). Longest = 2.
+    logs_broken = [{"date": yesterday_str}, {"date": day_before_str}, {"date": four_days_ago_str}]
+    assert calculate_streaks(logs_broken) == (2, 2)
+    
+    # Broken streak: logged day before, and 4 days ago. (No log today or yesterday).
+    # Current streak = 0. Longest = 1.
+    logs_stale = [{"date": day_before_str}, {"date": four_days_ago_str}]
+    assert calculate_streaks(logs_stale) == (0, 1)
+
+
+@patch("telegram_bot.bot.send_msg")
+@patch("telegram_bot.bot.fetch_daily_logs")
+def test_stats_command(mock_fetch, mock_send):
+    chat_id = "12345"
+    
+    # Mock daily logs return values
+    today_str = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+    mock_fetch.return_value = [
+        {"date": today_str, "mood_score": 8, "sleep_quality": 7, "steps": 12000}
+    ]
+    
+    handle_message(chat_id, "/stats")
+    
+    # Should show "loading" first, then statistics
+    assert mock_send.call_count == 2
+    args_loading = mock_send.call_args_list[0][0]
+    args_stats = mock_send.call_args_list[1][0]
+    
+    assert "Загрузка статистики" in args_loading[1]
+    assert "Подробная статистика отчетов" in args_stats[1]
+    assert "Всего отчетов: `1`" in args_stats[1]
+    assert "Настроение: `8.0/10`" in args_stats[1]
+    assert "Качество сна: `7.0/10`" in args_stats[1]
+    assert "Шаги: `12,000`" in args_stats[1]
+
+
+@patch("telegram_bot.bot.send_msg")
+@patch("telegram_bot.bot.fetch_daily_logs")
+def test_streak_command(mock_fetch, mock_send):
+    chat_id = "12345"
+    
+    today_str = datetime.now(ZoneInfo("Europe/Moscow")).date().isoformat()
+    mock_fetch.return_value = [
+        {"date": today_str}
+    ]
+    
+    handle_message(chat_id, "/streak")
+    
+    # Should show loading first, then streak info
+    assert mock_send.call_count == 2
+    args_streak = mock_send.call_args_list[1][0]
+    
+    assert "Серии заполнений" in args_streak[1]
+    assert "Текущая серия: `1`" in args_streak[1]
 

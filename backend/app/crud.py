@@ -19,34 +19,35 @@ def get_daily_logs(db: Session, start_date: Optional[date] = None, end_date: Opt
 def upsert_daily_log(db: Session, log_in: schemas.DailyLogCreate) -> models.DailyLog:
     db_log = get_daily_log(db, log_in.date)
     
-    log_data = log_in.model_dump(exclude={"supplements"})
-    
     if db_log:
-        # Update existing
+        # Update existing - only update fields that were explicitly set in the request
+        log_data = log_in.model_dump(exclude={"supplements"}, exclude_unset=True)
         for key, value in log_data.items():
             setattr(db_log, key, value)
     else:
-        # Create new
+        # Create new - include all fields
+        log_data = log_in.model_dump(exclude={"supplements"})
         db_log = models.DailyLog(**log_data)
         db.add(db_log)
     
     db.commit()
     db.refresh(db_log)
     
-    # Handle supplements: delete old ones for this date and add new ones
-    db.query(models.DailySupplement).filter(models.DailySupplement.date == log_in.date).delete()
-    
-    for supp_in in log_in.supplements:
-        db_supp = models.DailySupplement(
-            date=log_in.date,
-            name=supp_in.name,
-            dosage=supp_in.dosage,
-            unit=supp_in.unit
-        )
-        db.add(db_supp)
+    # Handle supplements: only delete old ones and add new ones if supplements were explicitly provided
+    if "supplements" in log_in.model_fields_set:
+        db.query(models.DailySupplement).filter(models.DailySupplement.date == log_in.date).delete()
         
-    db.commit()
-    db.refresh(db_log)
+        for supp_in in log_in.supplements:
+            db_supp = models.DailySupplement(
+                date=log_in.date,
+                name=supp_in.name,
+                dosage=supp_in.dosage,
+                unit=supp_in.unit
+            )
+            db.add(db_supp)
+            
+        db.commit()
+        db.refresh(db_log)
     return db_log
 
 def delete_daily_log(db: Session, log_date: date) -> bool:

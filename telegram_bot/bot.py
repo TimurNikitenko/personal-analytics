@@ -1,5 +1,6 @@
 import os
 import time
+import random
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -104,6 +105,21 @@ def answer_callback(callback_query_id, text=None):
     except Exception as e:
         print(f"Error answering callback query: {e}")
 
+MOTIVATIONAL_QUOTES = [
+    "Тот, кто умеет управлять каждым днем, умеет управлять своей жизнью.",
+    "Постоянство превосходит интенсивность. Пора записать итоги сегодняшнего дня!",
+    "Если вы не измеряете это, вы не можете это улучшить. Уделите пару минут логам.",
+    "Каждый шаг вперед приближает вас к цели. Запишите свои показатели за сегодня!",
+    "Маленькие ежедневные шаги ведут к большим результатам. Давайте заполним лог!",
+    "Анализ прошлого дня — компас для дня завтрашнего. Пора залогировать день.",
+    "Ваша жизнь складывается из ваших привычек. Оцифруйте сегодняшний день!",
+    "Дисциплина — это мост между целями и достижениями. Жду ваш лог за сегодня.",
+    "Узнайте себя лучше через данные. Давайте заполним отчет.",
+    "То, что мы делаем каждый день, определяет то, кем мы станем. Сделайте запись в лог!",
+    "Запись сегодняшних побед и уроков — залог продуктивного завтра.",
+    "Не откладывайте на завтра то, что можно залогировать сегодня!"
+]
+
 def send_reminder():
     """
     Background cron job to send daily logs reminder.
@@ -116,10 +132,17 @@ def send_reminder():
         print("TELEGRAM_CHAT_ID not set. Please send /start to your Telegram bot to register.")
         return
         
+    quote = random.choice(MOTIVATIONAL_QUOTES)
+    text = (
+        f"🔔 **Время заполнить отчет за сегодня!**\n\n"
+        f"💬 *«{quote}»*\n\n"
+        f"Отправьте `/log` или перейдите в веб-приложение. 📊"
+    )
+    
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": chat_id,
-        "text": "🔔 **Personal Analytics Reminder**\n\nIt's time to log your day! Send `/log` to this bot to record your metrics here, or head over to the web app. 📊",
+        "text": text,
         "parse_mode": "Markdown"
     }
     try:
@@ -128,6 +151,164 @@ def send_reminder():
         print(f"[{datetime.now()}] Daily reminder sent successfully to chat ID: {chat_id}")
     except Exception as e:
         print(f"[{datetime.now()}] Error sending daily reminder: {e}")
+
+def send_morning_sleep_survey():
+    """
+    Background cron job to send morning sleep quality survey.
+    """
+    chat_id = get_chat_id_from_backend() or chat_id_store
+    if not BOT_TOKEN:
+        print("TELEGRAM_BOT_TOKEN not configured. Skipping sleep survey.")
+        return
+    if not chat_id:
+        print("TELEGRAM_CHAT_ID not set. Please send /start to your Telegram bot to register.")
+        return
+        
+    text = "🌅 **Доброе утро!**\n\nКак вы оцените качество своего сна по шкале от 1 до 10?"
+    markup = {
+        "inline_keyboard": [
+            [{"text": str(i), "callback_data": f"sleepq_{i}"} for i in range(1, 6)],
+            [{"text": str(i), "callback_data": f"sleepq_{i}"} for i in range(6, 11)],
+            [{"text": "Пропустить ➡️", "callback_data": "sleepq_skip"}]
+        ]
+    }
+    
+    try:
+        send_msg(chat_id, text, reply_markup=markup)
+        print(f"[{datetime.now()}] Morning sleep quality survey sent successfully to chat ID: {chat_id}")
+    except Exception as e:
+        print(f"[{datetime.now()}] Error sending morning sleep survey: {e}")
+
+def fetch_daily_logs():
+    """
+    Fetches all daily logs from the backend.
+    """
+    try:
+        url = f"{BACKEND_URL}/api/daily-logs/"
+        r = requests.get(url, timeout=10.0)
+        if r.status_code == 200:
+            return r.json()
+    except Exception as e:
+        print(f"Failed to fetch daily logs for bot statistics: {e}")
+    return None
+
+def calculate_streaks(logs):
+    """
+    Calculates current and longest streaks based on daily logs date field.
+    """
+    if not logs:
+        return 0, 0
+        
+    # Extract unique log dates, parse to date objects, and sort descending
+    dates = sorted({datetime.strptime(log["date"], "%Y-%m-%d").date() for log in logs}, reverse=True)
+    if not dates:
+        return 0, 0
+        
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date()
+    
+    # Check if the user logged today or yesterday. If not, current streak is 0.
+    if dates[0] != today and dates[0] != today - timedelta(days=1):
+        current_streak = 0
+    else:
+        current_streak = 1
+        for i in range(len(dates) - 1):
+            diff = dates[i] - dates[i+1]
+            if diff == timedelta(days=1):
+                current_streak += 1
+            elif diff > timedelta(days=1):
+                break
+                
+    # Longest streak calculation
+    dates_asc = sorted(dates)
+    longest_streak = 0
+    temp_streak = 0
+    prev_date = None
+    for d in dates_asc:
+        if prev_date is None:
+            temp_streak = 1
+        elif d - prev_date == timedelta(days=1):
+            temp_streak += 1
+        elif d - prev_date > timedelta(days=1):
+            longest_streak = max(longest_streak, temp_streak)
+            temp_streak = 1
+        prev_date = d
+    longest_streak = max(longest_streak, temp_streak)
+    
+    return current_streak, longest_streak
+
+def get_streak_emoji(streak):
+    """
+    Returns an emoji corresponding to the streak length.
+    """
+    if streak >= 30:
+        return "👑"
+    elif streak >= 7:
+        return "🔥"
+    elif streak > 0:
+        return "⚡"
+    return "💤"
+
+def get_stats_message():
+    """
+    Builds a detailed summary statistics message in Russian from backend daily logs.
+    """
+    logs = fetch_daily_logs()
+    if not logs:
+        return "📊 **Статистика логов**\n\nНет данных для вывода статистики. Начните заполнять логи с помощью команды `/log`!"
+        
+    total_logs = len(logs)
+    current_streak, longest_streak = calculate_streaks(logs)
+    
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date()
+    last_7_days = {today - timedelta(days=i) for i in range(7)}
+    last_30_days = {today - timedelta(days=i) for i in range(30)}
+    
+    logs_last_7 = 0
+    logs_last_30 = 0
+    mood_scores = []
+    sleep_qualities = []
+    steps_counts = []
+    
+    for log in logs:
+        log_date = datetime.strptime(log["date"], "%Y-%m-%d").date()
+        if log_date in last_7_days:
+            logs_last_7 += 1
+        if log_date in last_30_days:
+            logs_last_30 += 1
+            
+        if log.get("mood_score") is not None:
+            mood_scores.append(log["mood_score"])
+        if log.get("sleep_quality") is not None:
+            sleep_qualities.append(log["sleep_quality"])
+        if log.get("steps") is not None:
+            steps_counts.append(log["steps"])
+            
+    rate_7 = (logs_last_7 / 7) * 100
+    rate_30 = (logs_last_30 / 30) * 100
+    
+    avg_mood = sum(mood_scores) / len(mood_scores) if mood_scores else None
+    avg_sleep = sum(sleep_qualities) / len(sleep_qualities) if sleep_qualities else None
+    avg_steps = sum(steps_counts) / len(steps_counts) if steps_counts else None
+    
+    msg = (
+        f"📊 **Подробная статистика отчетов**\n\n"
+        f"📈 **Заполняемость:**\n"
+        f"- Всего отчетов: `{total_logs}`\n"
+        f"- За последние 7 дней: `{logs_last_7}/7` ({rate_7:.0f}%)\n"
+        f"- За последние 30 дней: `{logs_last_30}/30` ({rate_30:.0f}%)\n\n"
+        f"🔥 **Серии заполнений (Streaks):**\n"
+        f"- Текущая серия: `{current_streak}` {get_streak_emoji(current_streak)}\n"
+        f"- Рекордная серия: `{longest_streak}` 🏆\n\n"
+        f"🧠 **Средние показатели (за все время):**\n"
+    )
+    if avg_mood is not None:
+        msg += f"- Настроение: `{avg_mood:.1f}/10`\n"
+    if avg_sleep is not None:
+        msg += f"- Качество сна: `{avg_sleep:.1f}/10`\n"
+    if avg_steps is not None:
+        msg += f"- Шаги: `{int(avg_steps):,}`\n"
+        
+    return msg
 
 def send_supplements_checklist(chat_id, message_id=None):
     """
@@ -626,6 +807,33 @@ def handle_callback(callback_query):
     data = callback_query.get("data")
     message_id = message.get("message_id")
     
+    if data.startswith("sleepq_"):
+        q_val = data.split("_")[1]
+        moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
+        log_date = moscow_time.date().isoformat()
+        
+        if q_val == "skip":
+            answer_callback(callback_query_id, "Пропущено")
+            edit_msg(chat_id, message_id, f"💤 Оценка качества сна за {log_date} пропущена.")
+        else:
+            try:
+                score = int(q_val)
+                answer_callback(callback_query_id, f"Оценка: {score}")
+                
+                payload = {
+                    "date": log_date,
+                    "sleep_quality": score
+                }
+                url = f"{BACKEND_URL}/api/daily-logs"
+                r = requests.post(url, json=payload, timeout=10.0)
+                r.raise_for_status()
+                
+                edit_msg(chat_id, message_id, f"✅ Сохранена оценка качества сна за {log_date}: **{score}/10**")
+            except Exception as e:
+                print(f"Error saving morning sleep quality: {e}")
+                edit_msg(chat_id, message_id, f"❌ Не удалось сохранить оценку сна: {e}")
+        return
+
     if chat_id not in sessions:
         answer_callback(callback_query_id, "Session expired. Type /log to start.")
         return
@@ -749,6 +957,35 @@ def handle_message(chat_id, text):
             send_msg(chat_id, "No active logging session to cancel.")
         return
 
+    if text == "/stats":
+        send_msg(chat_id, "⌛ Загрузка статистики...")
+        try:
+            stats_msg = get_stats_message()
+            send_msg(chat_id, stats_msg)
+        except Exception as e:
+            send_msg(chat_id, f"❌ Ошибка при получении статистики: {e}")
+        return
+
+    if text == "/streak":
+        send_msg(chat_id, "⌛ Получение информации о сериях заполнений...")
+        try:
+            logs = fetch_daily_logs()
+            if not logs:
+                send_msg(chat_id, "💤 У вас пока нет заполненных отчетов. Начните с команды `/log`!")
+            else:
+                current_streak, longest_streak = calculate_streaks(logs)
+                emoji = get_streak_emoji(current_streak)
+                msg = (
+                    f"🔥 **Серии заполнений (Streaks)**\n\n"
+                    f"Текущая серия: `{current_streak}` {emoji}\n"
+                    f"Рекордная серия: `{longest_streak}` 🏆\n\n"
+                    f"Продолжайте заполнять логи каждый день, чтобы поддерживать серию! 🚀"
+                )
+                send_msg(chat_id, msg)
+        except Exception as e:
+            send_msg(chat_id, f"❌ Ошибка при получении серии заполнений: {e}")
+        return
+
     if chat_id in sessions:
         session = sessions[chat_id]
         
@@ -868,11 +1105,38 @@ def check_updates():
             print(f"Error in updates polling loop: {e}")
             time.sleep(10)
             
+def set_bot_commands():
+    """
+    Registers commands in the Telegram Bot menu.
+    """
+    if not BOT_TOKEN:
+        print("TELEGRAM_BOT_TOKEN not configured. Skipping command registration.")
+        return
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/setMyCommands"
+    payload = {
+        "commands": [
+            {"command": "log", "description": "Начать заполнение отчета за день"},
+            {"command": "stats", "description": "Посмотреть детальную статистику отчетов"},
+            {"command": "streak", "description": "Посмотреть серию заполнений (streak)"},
+            {"command": "cancel", "description": "Отменить текущую сессию заполнения"},
+            {"command": "start", "description": "Запустить или перезапустить бота"}
+        ]
+    }
+    try:
+        r = requests.post(url, json=payload, timeout=5.0)
+        r.raise_for_status()
+        print("Bot commands registered successfully in Telegram menu.")
+    except Exception as e:
+        print(f"Failed to register bot commands: {e}")
+
 if __name__ == "__main__":
     print("Starting Telegram Bot Service...")
     print(f"Configured Bot Token: {'***' if BOT_TOKEN else 'NONE'}")
     print(f"Configured Chat ID: {chat_id_store if chat_id_store else 'NONE (Dynamic registration active)'}")
     print(f"Reminder Scheduled Daily at: {REMINDER_HOUR:02d}:00 MSK (Europe/Moscow)")
+
+    # Set bot commands in Telegram menu
+    set_bot_commands()
 
     # If static Chat ID configured, register it on backend startup
     if chat_id_store:
@@ -881,6 +1145,7 @@ if __name__ == "__main__":
     # Start Scheduler
     scheduler = BackgroundScheduler(timezone=ZoneInfo("Europe/Moscow"))
     scheduler.add_job(send_reminder, 'cron', hour=REMINDER_HOUR, minute=0)
+    scheduler.add_job(send_morning_sleep_survey, 'cron', hour=7, minute=0)
     scheduler.start()
 
     # Start update polling in main thread

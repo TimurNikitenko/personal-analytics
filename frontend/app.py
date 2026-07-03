@@ -200,7 +200,7 @@ with tab1:
         st.markdown("### 🛌 Sleep Timing & Quality")
         log_sleep = st.checkbox(
             "Log Sleep Window today?", 
-            value=(existing_log is not None and (existing_log.get("sleep_start") is not None or existing_log.get("sleep_end") is not None))
+            value=(existing_log is not None and (existing_log.get("sleep_start") is not None or existing_log.get("sleep_end") is not None or existing_log.get("sleep_quality") is not None))
         )
         if log_sleep:
             sleep_start_time = st.time_input("Going to sleep time", def_sleep_start.time(), step=300)
