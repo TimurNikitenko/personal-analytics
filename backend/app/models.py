@@ -20,6 +20,7 @@ class DailyLog(Base):
     created_at = Column(DateTime(timezone=True), server_default=text("now()"))
 
     supplements = relationship("DailySupplement", back_populates="daily_log", cascade="all, delete-orphan")
+    agent_insights = relationship("AgentInsight", back_populates="daily_log", cascade="all, delete-orphan")
 
 class DailySupplement(Base):
     __tablename__ = "daily_supplements"
@@ -174,4 +175,17 @@ class WorkoutSet(Base):
     notes = Column(String, nullable=True)
 
     workout = relationship("StrengthWorkout", back_populates="sets")
+
+
+class AgentInsight(Base):
+    __tablename__ = "agent_insights"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, ForeignKey("daily_logs.date", ondelete="CASCADE"), nullable=False)
+    agent_question = Column(String, nullable=True)
+    user_answer = Column(String, nullable=True)
+    compiled_insight = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+
+    daily_log = relationship("DailyLog", back_populates="agent_insights")
 

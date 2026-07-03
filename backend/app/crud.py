@@ -407,3 +407,34 @@ def delete_strength_workout(db: Session, workout_id: int) -> bool:
     return False
 
 
+# ==================== Agent Insights ====================
+
+def create_agent_insight(db: Session, insight_in: schemas.AgentInsightCreate) -> models.AgentInsight:
+    db_insight = models.AgentInsight(**insight_in.model_dump())
+    db.add(db_insight)
+    db.commit()
+    db.refresh(db_insight)
+    return db_insight
+
+def get_agent_insights(
+    db: Session, 
+    start_date: Optional[date] = None, 
+    end_date: Optional[date] = None
+) -> List[models.AgentInsight]:
+    query = db.query(models.AgentInsight)
+    if start_date:
+        query = query.filter(models.AgentInsight.date >= start_date)
+    if end_date:
+        query = query.filter(models.AgentInsight.date <= end_date)
+    return query.order_by(models.AgentInsight.date.desc(), models.AgentInsight.created_at.desc()).all()
+
+def delete_agent_insight(db: Session, insight_id: int) -> bool:
+    db_insight = db.query(models.AgentInsight).filter(models.AgentInsight.id == insight_id).first()
+    if db_insight:
+        db.delete(db_insight)
+        db.commit()
+        return True
+    return False
+
+
+

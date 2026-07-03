@@ -19,6 +19,25 @@ class DailySupplement(DailySupplementBase):
     class Config:
         from_attributes = True
 
+
+# AgentInsight Schemas
+class AgentInsightBase(BaseModel):
+    date: date
+    agent_question: Optional[str] = None
+    user_answer: Optional[str] = None
+    compiled_insight: str
+
+class AgentInsightCreate(AgentInsightBase):
+    pass
+
+class AgentInsight(AgentInsightBase):
+    id: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 # DailyLog
 class DailyLogBase(BaseModel):
     date: date
@@ -39,6 +58,7 @@ class DailyLogCreate(DailyLogBase):
 class DailyLog(DailyLogBase):
     created_at: datetime
     supplements: List[DailySupplement] = []
+    agent_insights: List[AgentInsight] = []
 
     class Config:
         from_attributes = True

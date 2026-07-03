@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 import pandas as pd
 
 from backend.app.database import engine, Base, get_db
-from backend.app.routers import daily_logs, finances, metrics, learning, goals, ml, telegram, nutrition, medical_tests, experiments, strength_workouts
+from backend.app.routers import daily_logs, finances, metrics, learning, goals, ml, telegram, nutrition, medical_tests, experiments, strength_workouts, agent_insights
 
 # Auto-create database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -35,6 +35,8 @@ app.include_router(nutrition.router, prefix="/api")
 app.include_router(medical_tests.router, prefix="/api")
 app.include_router(experiments.router, prefix="/api")
 app.include_router(strength_workouts.router, prefix="/api")
+app.include_router(agent_insights.router, prefix="/api")
+
 
 @app.get("/")
 def read_root():
