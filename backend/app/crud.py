@@ -437,4 +437,87 @@ def delete_agent_insight(db: Session, insight_id: int) -> bool:
     return False
 
 
+# ==================== Spontaneous Notes ====================
+
+def create_spontaneous_note(db: Session, note_in: schemas.SpontaneousNoteCreate) -> models.SpontaneousNote:
+    db_note = models.SpontaneousNote(**note_in.model_dump())
+    db.add(db_note)
+    db.commit()
+    db.refresh(db_note)
+    return db_note
+
+def get_undisplayed_notes(db: Session) -> List[models.SpontaneousNote]:
+    return db.query(models.SpontaneousNote).filter(models.SpontaneousNote.displayed == False).order_by(models.SpontaneousNote.created_at.asc()).all()
+
+def get_spontaneous_notes_by_date(db: Session, target_date: date) -> List[models.SpontaneousNote]:
+    from sqlalchemy import cast, Date
+    return db.query(models.SpontaneousNote).filter(cast(models.SpontaneousNote.created_at, Date) == target_date).order_by(models.SpontaneousNote.created_at.asc()).all()
+
+def mark_notes_as_displayed(db: Session, note_ids: List[int]) -> bool:
+    db.query(models.SpontaneousNote).filter(models.SpontaneousNote.id.in_(note_ids)).update({"displayed": True}, synchronize_session=False)
+    db.commit()
+    return True
+
+# ==================== Food Products ====================
+
+def get_food_products(db: Session) -> List[models.FoodProduct]:
+    return db.query(models.FoodProduct).order_by(models.FoodProduct.name.asc()).all()
+
+def create_food_product(db: Session, product_in: schemas.FoodProductCreate) -> models.FoodProduct:
+    existing = db.query(models.FoodProduct).filter(models.FoodProduct.name == product_in.name).first()
+    if existing:
+        return existing
+    db_product = models.FoodProduct(**product_in.model_dump())
+    db.add(db_product)
+    db.commit()
+    db.refresh(db_product)
+    return db_product
+
+# ==================== Meals & Nutrition ====================
+
+def get_meals_by_date(db: Session, target_date: date) -> List[models.Meal]:
+    return db.query(models.Meal).filter(models.Meal.date == target_date).order_by(models.Meal.meal_type.asc()).all()
+
+def upsert_meal(db: Session, meal_in: schemas.MealCreate) -> models.Meal:
+    db_meal = db.query(models.Meal).filter(
+        models.Meal.date == meal_in.date,
+        models.Meal.meal_type == meal_in.meal_type
+    ).first()
+
+    if db_meal:
+        if meal_in.photo_path is not None:
+            db_meal.photo_path = meal_in.photo_path
+        db.commit()
+        db.refresh(db_meal)
+    else:
+        db_meal = models.Meal(
+            date=meal_in.date,
+            meal_type=meal_in.meal_type,
+            photo_path=meal_in.photo_path
+        )
+        db.add(db_meal)
+        db.commit()
+        db.refresh(db_meal)
+
+    # Overwrite items
+    db.query(models.MealItem).filter(models.MealItem.meal_id == db_meal.id).delete()
+
+    for item_in in meal_in.items:
+        db_item = models.MealItem(
+            meal_id=db_meal.id,
+            product_name=item_in.product_name,
+            quantity=item_in.quantity,
+            unit=item_in.unit
+        )
+        db.add(db_item)
+        
+        # Auto-create food product if not exists
+        create_food_product(db, schemas.FoodProductCreate(name=item_in.product_name, default_unit=item_in.unit))
+
+    db.commit()
+    db.refresh(db_meal)
+    return db_meal
+
+
+
 

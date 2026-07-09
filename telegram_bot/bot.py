@@ -2,6 +2,8 @@ import os
 import time
 import random
 import requests
+import io
+from PIL import Image
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -178,6 +180,164 @@ def send_morning_sleep_survey():
         print(f"[{datetime.now()}] Morning sleep quality survey sent successfully to chat ID: {chat_id}")
     except Exception as e:
         print(f"[{datetime.now()}] Error sending morning sleep survey: {e}")
+
+# ==================== Meals Logging & Media Helpers ====================
+
+MEAL_PRESETS = {
+    "Breakfast": [
+        {"product_name": "Овсяные хлопья", "quantity": 150.0, "unit": "грамм"},
+        {"product_name": "Банан", "quantity": 1.0, "unit": "штука"},
+        {"product_name": "Какао порошок", "quantity": 1.0, "unit": "столовая ложка"}
+    ],
+    "Lunch": [
+        {"product_name": "Чечевица (красная)", "quantity": 150.0, "unit": "грамм"},
+        {"product_name": "Оливковое масло холодного отжима", "quantity": 2.0, "unit": "столовая ложка"},
+        {"product_name": "Помидоры", "quantity": 2.0, "unit": "штука"}
+    ],
+    "Dinner": [
+        {"product_name": "Гречка", "quantity": 150.0, "unit": "грамм"},
+        {"product_name": "Сардины консервированные", "quantity": 125.0, "unit": "грамм"},
+        {"product_name": "Квашенная капуста", "quantity": 100.0, "unit": "грамм"}
+    ]
+}
+
+def save_compressed_image(file_bytes, target_path):
+    """
+    Saves image bytes as compressed JPEG to target_path to save space.
+    """
+    try:
+        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+        img = Image.open(io.BytesIO(file_bytes))
+        if img.mode in ("RGBA", "P"):
+            img = img.convert("RGB")
+        img.save(target_path, "JPEG", quality=75, optimize=True)
+        print(f"Compressed image saved: {target_path}")
+        return True
+    except Exception as e:
+        print(f"Failed to compress with Pillow: {e}. Saving raw.")
+        try:
+            with open(target_path, "wb") as f:
+                f.write(file_bytes)
+            return True
+        except Exception as write_err:
+            print(f"Failed to save raw: {write_err}")
+            return False
+
+def download_telegram_file(file_id, dest_path):
+    """
+    Downloads file from Telegram by file_id and writes to dest_path.
+    """
+    if not BOT_TOKEN:
+        return False
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/getFile?file_id={file_id}"
+        r = requests.get(url, timeout=10.0)
+        r.raise_for_status()
+        file_path = r.json().get("result", {}).get("file_path")
+        if not file_path:
+            return False
+        download_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_path}"
+        file_r = requests.get(download_url, timeout=30.0)
+        file_r.raise_for_status()
+        
+        is_image = file_path.lower().endswith((".jpg", ".jpeg", ".png"))
+        if is_image:
+            return save_compressed_image(file_r.content, dest_path)
+        else:
+            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+            with open(dest_path, "wb") as f:
+                f.write(file_r.content)
+            return True
+    except Exception as e:
+        print(f"Error downloading Telegram file {file_id}: {e}")
+        return False
+
+def send_breakfast_survey():
+    send_meal_survey("Breakfast")
+
+def send_lunch_survey():
+    send_meal_survey("Lunch")
+
+def send_dinner_survey():
+    send_meal_survey("Dinner")
+
+def send_meal_survey(meal_type):
+    chat_id = chat_id_store or get_chat_id_from_backend()
+    if not BOT_TOKEN:
+        return
+    if not chat_id:
+        print(f"Skipping {meal_type} survey: chat_id not set.")
+        return
+        
+    sessions.pop(chat_id, None)  # Reset any active logging session
+    
+    meal_names_ru = {"Breakfast": "завтрак", "Lunch": "обед", "Dinner": "ужин"}
+    ru_name = meal_names_ru.get(meal_type, "прием пищи")
+    
+    text = f"🍽️ **Время логгировать {ru_name}!**\n\nВыберите вариант:"
+    markup = {
+        "inline_keyboard": [
+            [{"text": "🥗 Стандартный пресет", "callback_data": f"meal_preset_{meal_type}"}],
+            [{"text": "✍️ Вручную по продуктам", "callback_data": f"meal_manual_{meal_type}"}],
+            [{"text": "📷 Отправить фото", "callback_data": f"meal_photo_ask_{meal_type}"}],
+            [{"text": "Пропустить ➡️", "callback_data": f"meal_skip_{meal_type}"}]
+        ]
+    }
+    send_msg(chat_id, text, reply_markup=markup)
+
+def send_meal_product_selector(chat_id, message_id=None):
+    session = sessions.get(chat_id)
+    if not session:
+        return
+        
+    meal_names_ru = {"Breakfast": "завтрак", "Lunch": "обед", "Dinner": "ужин"}
+    ru_name = meal_names_ru.get(session["meal_type"], "прием пищи")
+    
+    text = f"🍽️ **Логгирование: {ru_name.capitalize()}**\n\n"
+    if session["items"]:
+        text += "**Уже добавлено:**\n"
+        for it in session["items"]:
+            text += f"- {it['product_name']} — {it['quantity']} {it['unit']}\n"
+        text += "\n"
+    else:
+        text += "*(Пока нет добавленных продуктов)*\n\n"
+        
+    text += "Выберите продукт из списка или добавьте новый:"
+    
+    try:
+        r = requests.get(f"{BACKEND_URL}/api/meals/food-products", timeout=5.0)
+        products = r.json()
+    except Exception as e:
+        print(f"Error fetching food products: {e}")
+        products = []
+        
+    keyboard = []
+    for p in products[:15]:
+        keyboard.append([{"text": f"{p['name']} ({p['default_unit']})", "callback_data": f"mealprod_sel_{p['id']}"}])
+        
+    keyboard.append([{"text": "➕ Добавить новый продукт", "callback_data": "mealprod_addnew"}])
+    if session["items"]:
+        keyboard.append([{"text": "💾 Сохранить и завершить", "callback_data": "mealprod_done"}])
+    keyboard.append([{"text": "❌ Отмена", "callback_data": "mealprod_cancel"}])
+    
+    markup = {"inline_keyboard": keyboard}
+    if message_id:
+        edit_msg(chat_id, message_id, text, reply_markup=markup)
+    else:
+        send_msg(chat_id, text, reply_markup=markup)
+
+def parse_quantity_input(text):
+    text = text.strip()
+    parts = text.split(None, 1)
+    if not parts:
+        return None, None
+    try:
+        qty = float(parts[0].replace(",", "."))
+    except ValueError:
+        return None, None
+    unit = parts[1].strip() if len(parts) > 1 else None
+    return qty, unit
+
 
 def fetch_daily_logs():
     """
@@ -834,6 +994,208 @@ def handle_callback(callback_query):
                 edit_msg(chat_id, message_id, f"❌ Не удалось сохранить оценку сна: {e}")
         return
 
+    # === MEALS CALLBACKS (outside active logging session check) ===
+    if data.startswith("meal_"):
+        moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
+        today_iso = moscow_time.date().isoformat()
+        meal_names_ru = {"Breakfast": "завтрак", "Lunch": "обед", "Dinner": "ужин"}
+        
+        if data.startswith("meal_preset_"):
+            meal_type = data.split("_")[2]
+            ru_name = meal_names_ru.get(meal_type, "прием пищи")
+            items = MEAL_PRESETS.get(meal_type, [])
+            
+            payload = {
+                "date": today_iso,
+                "meal_type": meal_type,
+                "items": items,
+                "photo_path": None
+            }
+            try:
+                r = requests.post(f"{BACKEND_URL}/api/meals/", json=payload, timeout=10.0)
+                r.raise_for_status()
+                answer_callback(callback_query_id, "Пресет сохранен")
+                edit_msg(chat_id, message_id, f"✅ Записан стандартный {ru_name} за {today_iso}!")
+            except Exception as e:
+                print(f"Error saving meal preset: {e}")
+                answer_callback(callback_query_id, "Ошибка сохранения")
+                edit_msg(chat_id, message_id, f"❌ Ошибка сохранения пресета: {e}")
+            return
+
+        elif data.startswith("meal_skip_"):
+            meal_type = data.split("_")[2]
+            ru_name = meal_names_ru.get(meal_type, "прием пищи")
+            answer_callback(callback_query_id, "Пропущено")
+            edit_msg(chat_id, message_id, f"➡️ Логгирование {ru_name} за {today_iso} пропущено.")
+            return
+
+        elif data.startswith("meal_photo_ask_"):
+            meal_type = data.split("_")[3]
+            ru_name = meal_names_ru.get(meal_type, "прием пищи")
+            answer_callback(callback_query_id)
+            sessions[chat_id] = {
+                "session_type": "meal_photo",
+                "meal_type": meal_type
+            }
+            edit_msg(chat_id, message_id, f"📷 Пожалуйста, пришлите фотографию вашего приема пищи ({ru_name}).\nОтправьте `/cancel` для отмены.")
+            return
+
+        elif data.startswith("meal_photo_save_"):
+            choice = data.split("_")[3]
+            photo_path = sessions.get(chat_id, {}).get("photo_path")
+            
+            if not photo_path:
+                answer_callback(callback_query_id, "Ошибка сессии")
+                edit_msg(chat_id, message_id, "❌ Сессия истекла.")
+                sessions.pop(chat_id, None)
+                return
+                
+            if choice == "Note":
+                payload = {
+                    "note_text": "[Фото заметка]",
+                    "file_path": photo_path,
+                    "file_type": "image"
+                }
+                try:
+                    r = requests.post(f"{BACKEND_URL}/api/notes/", json=payload, timeout=10.0)
+                    r.raise_for_status()
+                    answer_callback(callback_query_id, "Фото сохранено")
+                    edit_msg(chat_id, message_id, "📷 Фото-заметка успешно сохранена!")
+                except Exception as e:
+                    print(f"Error saving image note: {e}")
+                    answer_callback(callback_query_id, "Ошибка")
+                    edit_msg(chat_id, message_id, f"❌ Ошибка: {e}")
+            else:
+                ru_name = meal_names_ru.get(choice, "прием пищи")
+                payload = {
+                    "date": today_iso,
+                    "meal_type": choice,
+                    "items": [],
+                    "photo_path": photo_path
+                }
+                try:
+                    r = requests.post(f"{BACKEND_URL}/api/meals/", json=payload, timeout=10.0)
+                    r.raise_for_status()
+                    answer_callback(callback_query_id, "Фото сохранено")
+                    edit_msg(chat_id, message_id, f"✅ Фото приема пищи ({ru_name}) успешно сохранено!")
+                except Exception as e:
+                    print(f"Error saving meal photo: {e}")
+                    answer_callback(callback_query_id, "Ошибка")
+                    edit_msg(chat_id, message_id, f"❌ Ошибка: {e}")
+            sessions.pop(chat_id, None)
+            return
+
+        elif data.startswith("meal_manual_"):
+            meal_type = data.split("_")[2]
+            answer_callback(callback_query_id)
+            sessions[chat_id] = {
+                "session_type": "meal",
+                "meal_type": meal_type,
+                "items": [],
+                "current_action": "choose_product",
+                "temp_product_name": None,
+                "temp_product_unit": None,
+                "temp_quantity": None
+            }
+            send_meal_product_selector(chat_id, message_id=message_id)
+            return
+
+    # === MEAL MANUAL LOGGING CALLBACKS (inside active logging check but handled separately) ===
+    if data.startswith("mealprod_"):
+        if chat_id not in sessions or sessions[chat_id].get("session_type") != "meal":
+            answer_callback(callback_query_id, "Сессия истекла.")
+            return
+            
+        session = sessions[chat_id]
+        
+        if data == "mealprod_cancel":
+            answer_callback(callback_query_id, "Отменено")
+            edit_msg(chat_id, message_id, "❌ Заполнение приема пищи отменено.")
+            sessions.pop(chat_id, None)
+            return
+            
+        elif data == "mealprod_done":
+            if not session["items"]:
+                answer_callback(callback_query_id, "Добавьте продукты!")
+                return
+                
+            moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
+            today_iso = moscow_time.date().isoformat()
+            meal_names_ru = {"Breakfast": "завтрак", "Lunch": "обед", "Dinner": "ужин"}
+            ru_name = meal_names_ru.get(session["meal_type"], "прием пищи")
+            
+            payload = {
+                "date": today_iso,
+                "meal_type": session["meal_type"],
+                "items": session["items"],
+                "photo_path": None
+            }
+            try:
+                r = requests.post(f"{BACKEND_URL}/api/meals/", json=payload, timeout=10.0)
+                r.raise_for_status()
+                answer_callback(callback_query_id, "Сохранено")
+                edit_msg(chat_id, message_id, f"✅ Прием пищи ({ru_name}) успешно сохранен за {today_iso}!")
+            except Exception as e:
+                print(f"Error saving custom meal: {e}")
+                answer_callback(callback_query_id, "Ошибка сохранения")
+                edit_msg(chat_id, message_id, f"❌ Ошибка сохранения: {e}")
+            sessions.pop(chat_id, None)
+            return
+            
+        elif data == "mealprod_addnew":
+            answer_callback(callback_query_id)
+            session["current_action"] = "input_new_product_name"
+            edit_msg(chat_id, message_id, "✍️ Введите название нового продукта:")
+            return
+            
+        elif data.startswith("mealprod_sel_"):
+            prod_id = int(data.split("_")[2])
+            answer_callback(callback_query_id)
+            try:
+                r = requests.get(f"{BACKEND_URL}/api/meals/food-products", timeout=5.0)
+                products = r.json()
+                product = next((p for p in products if p["id"] == prod_id), None)
+            except Exception:
+                product = None
+                
+            if not product:
+                edit_msg(chat_id, message_id, "❌ Продукт не найден. Попробуйте еще раз.")
+                send_meal_product_selector(chat_id, message_id=message_id)
+                return
+                
+            session["temp_product_name"] = product["name"]
+            session["temp_product_unit"] = product["default_unit"]
+            session["current_action"] = "input_quantity"
+            
+            edit_msg(chat_id, message_id, f"✍️ Введите количество для продукта **{product['name']}** (в {product['default_unit']}):\n\nИли введите количество и единицу через пробел (например, `150 грамм`).")
+            return
+            
+        elif data.startswith("mealprod_unit_"):
+            unit = data.split("_")[2]
+            answer_callback(callback_query_id)
+            if session.get("current_action") == "input_new_product_unit":
+                session["temp_product_unit"] = unit
+                try:
+                    payload = {"name": session["temp_product_name"], "default_unit": unit}
+                    requests.post(f"{BACKEND_URL}/api/meals/food-products", json=payload, timeout=5.0)
+                except Exception as e:
+                    print(f"Error pre-saving new product: {e}")
+                
+                session["current_action"] = "input_quantity"
+                edit_msg(chat_id, message_id, f"✍️ Введите количество для **{session['temp_product_name']}** (в {unit}):\n\nИли введите количество и единицу через пробел (например, `150 грамм`).")
+            elif session.get("current_action") == "input_quantity_unit":
+                session["items"].append({
+                    "product_name": session["temp_product_name"],
+                    "quantity": session["temp_quantity"],
+                    "unit": unit
+                })
+                session["current_action"] = "choose_product"
+                session["temp_product_name"] = None
+                session["temp_product_unit"] = None
+                session["temp_quantity"] = None
+                send_meal_product_selector(chat_id, message_id=message_id)
+            return
+
     if chat_id not in sessions:
         answer_callback(callback_query_id, "Session expired. Type /log to start.")
         return
@@ -926,13 +1288,14 @@ def handle_callback(callback_query):
         session["current_step"] = "done"
         ask_next_question(chat_id)
 
-def handle_message(chat_id, text):
+def handle_message(chat_id, text, message=None):
     """
     Processes incoming text messages, commands, or answers to logger steps.
     """
     global chat_id_store
-    text = text.strip()
+    text = text.strip() if text else ""
     
+    # 1. Handle commands first (available anytime)
     if text == "/start":
         chat_id_store = chat_id
         register_chat_id_on_backend(chat_id)
@@ -941,10 +1304,12 @@ def handle_message(chat_id, text):
             f"🎉 **Personal Analytics Bot Activated!**\n\n"
             f"Registered Chat ID: `{chat_id}`\n\n"
             f"Available Commands:\n"
-            f"📝 `/log` - Start interactive daily log questionnaire\n"
-            f"❌ `/cancel` - Cancel active logging session\n"
-            f"➡️ `/skip` - Skip current logging question\n\n"
-            f"You will receive daily reminders at {REMINDER_HOUR:02d}:00."
+            f"📝 `/log` - Начать заполнение отчета за день\n"
+            f"📝 `/note` - Сохранить спонтанную заметку\n"
+            f"📊 `/stats` - Посмотреть подробную статистику\n"
+            f"🔥 `/streak` - Посмотреть серию заполнений\n"
+            f"❌ `/cancel` - Отменить текущую сессию\n\n"
+            f"Вы будете получать уведомления в 7:00 (сон), 9:00 (завтрак), 13:00 (обед), 18:00 (ужин) и {REMINDER_HOUR:02d}:00 (вечерний отчет) по МСК."
         )
         send_msg(chat_id, reply_text)
         return
@@ -952,9 +1317,9 @@ def handle_message(chat_id, text):
     if text == "/cancel":
         if chat_id in sessions:
             sessions.pop(chat_id)
-            send_msg(chat_id, "❌ Interactive daily logging session cancelled.")
+            send_msg(chat_id, "❌ Текущая сессия отменена.")
         else:
-            send_msg(chat_id, "No active logging session to cancel.")
+            send_msg(chat_id, "Нет активной сессии для отмены.")
         return
 
     if text == "/stats":
@@ -986,10 +1351,145 @@ def handle_message(chat_id, text):
             send_msg(chat_id, f"❌ Ошибка при получении серии заполнений: {e}")
         return
 
+    # 2. Check active sessions
     if chat_id in sessions:
         session = sessions[chat_id]
+        session_type = session.get("session_type")
         
-        # Check if we are waiting for dosage input of a predefined supplement
+        if session_type == "meal":
+            action = session.get("current_action")
+            
+            if action == "input_new_product_name":
+                session["temp_product_name"] = text
+                session["current_action"] = "input_new_product_unit"
+                
+                # Ask for unit of measurement
+                text_prompt = f"📏 Выберите или введите единицу измерения по умолчанию для **{text}**:"
+                markup = {
+                    "inline_keyboard": [
+                        [{"text": "грамм", "callback_data": "mealprod_unit_грамм"}, {"text": "штука", "callback_data": "mealprod_unit_штука"}],
+                        [{"text": "столовая ложка", "callback_data": "mealprod_unit_столовая ложка"}, {"text": "чайная ложка", "callback_data": "mealprod_unit_чайная ложка"}],
+                        [{"text": "миллилитр", "callback_data": "mealprod_unit_миллилитр"}, {"text": "стакан", "callback_data": "mealprod_unit_стакан"}],
+                        [{"text": "порция", "callback_data": "mealprod_unit_порция"}]
+                    ]
+                }
+                send_msg(chat_id, text_prompt, reply_markup=markup)
+                return
+                
+            elif action == "input_new_product_unit":
+                session["temp_product_unit"] = text
+                # Pre-save new product in DB
+                try:
+                    payload = {"name": session["temp_product_name"], "default_unit": text}
+                    requests.post(f"{BACKEND_URL}/api/meals/food-products", json=payload, timeout=5.0)
+                except Exception as e:
+                    print(f"Error pre-saving new product: {e}")
+                    
+                session["current_action"] = "input_quantity"
+                send_msg(chat_id, f"✍️ Введите количество для **{session['temp_product_name']}** ({text}):\n\nИли введите количество и единицу через пробел (например, `150 грамм`).")
+                return
+                
+            elif action == "input_quantity":
+                qty, unit = parse_quantity_input(text)
+                if qty is None:
+                    send_msg(chat_id, "⚠️ Не удалось распознать количество. Пожалуйста, введите положительное число (например, `150` или `2.5`):")
+                    return
+                
+                if unit is None:
+                    # No unit was provided, ask if they want to choose a different unit or use the default one
+                    session["temp_quantity"] = qty
+                    session["current_action"] = "input_quantity_unit"
+                    default_unit = session["temp_product_unit"] or "грамм"
+                    text_prompt = f"📏 Использовать единицу по умолчанию `{default_unit}` или выбрать другую?"
+                    markup = {
+                        "inline_keyboard": [
+                            [{"text": f"Использовать {default_unit}", "callback_data": f"mealprod_unit_{default_unit}"}],
+                            [{"text": "грамм", "callback_data": "mealprod_unit_грамм"}, {"text": "штука", "callback_data": "mealprod_unit_штука"}],
+                            [{"text": "столовая ложка", "callback_data": "mealprod_unit_столовая ложка"}, {"text": "чайная ложка", "callback_data": "mealprod_unit_чайная ложка"}],
+                            [{"text": "миллилитр", "callback_data": "mealprod_unit_миллилитр"}, {"text": "стакан", "callback_data": "mealprod_unit_стакан"}]
+                        ]
+                    }
+                    send_msg(chat_id, text_prompt, reply_markup=markup)
+                    return
+                else:
+                    # Both quantity and unit were entered
+                    session["items"].append({
+                        "product_name": session["temp_product_name"],
+                        "quantity": qty,
+                        "unit": unit
+                    })
+                    session["current_action"] = "choose_product"
+                    session["temp_product_name"] = None
+                    session["temp_product_unit"] = None
+                    session["temp_quantity"] = None
+                    send_meal_product_selector(chat_id)
+                    return
+
+            elif action == "input_quantity_unit":
+                # If they type the unit manually
+                session["items"].append({
+                    "product_name": session["temp_product_name"],
+                    "quantity": session["temp_quantity"],
+                    "unit": text
+                })
+                session["current_action"] = "choose_product"
+                session["temp_product_name"] = None
+                session["temp_product_unit"] = None
+                session["temp_quantity"] = None
+                send_meal_product_selector(chat_id)
+                return
+
+        elif session_type == "meal_photo":
+            if message and message.get("photo"):
+                photo_list = message.get("photo")
+                file_id = photo_list[-1].get("file_id")
+                timestamp = int(time.time())
+                relative_path = f"/uploads/images/meal_{timestamp}.jpg"
+                dest_path = f"/app{relative_path}"
+                
+                success = download_telegram_file(file_id, dest_path)
+                if success:
+                    moscow_time = datetime.now(ZoneInfo("Europe/Moscow"))
+                    today_iso = moscow_time.date().isoformat()
+                    payload = {
+                        "date": today_iso,
+                        "meal_type": session["meal_type"],
+                        "items": [],
+                        "photo_path": relative_path
+                    }
+                    try:
+                        r = requests.post(f"{BACKEND_URL}/api/meals/", json=payload, timeout=10.0)
+                        r.raise_for_status()
+                        send_msg(chat_id, f"✅ Фото приема пищи ({session['meal_type']}) успешно сохранено!")
+                    except Exception as e:
+                        send_msg(chat_id, f"❌ Не удалось сохранить прием пищи на сервере: {e}")
+                else:
+                    send_msg(chat_id, "❌ Не удалось скачать фото. Попробуйте еще раз.")
+                sessions.pop(chat_id, None)
+            else:
+                send_msg(chat_id, "⚠️ Пожалуйста, пришлите фотографию приема пищи или введите `/cancel` для отмены.")
+            return
+
+        elif session_type == "spontaneous_note_input":
+            payload = {
+                "note_text": text,
+                "file_path": None,
+                "file_type": "text"
+            }
+            try:
+                r = requests.post(f"{BACKEND_URL}/api/notes/", json=payload, timeout=10.0)
+                r.raise_for_status()
+                send_msg(chat_id, "📝 Заметка сохранена!")
+            except Exception as e:
+                send_msg(chat_id, f"❌ Не удалось сохранить заметку: {e}")
+            sessions.pop(chat_id, None)
+            return
+
+        elif session_type == "spontaneous_photo_select":
+            send_msg(chat_id, "Пожалуйста, выберите вариант на клавиатуре выше или введите `/cancel`.")
+            return
+
+        # Default daily log session processing
         waiting_idx = session.get("waiting_for_dosage_of")
         if waiting_idx is not None:
             if text == "/skip":
@@ -1044,8 +1544,44 @@ def handle_message(chat_id, text):
         if handle_step_input(chat_id, text):
             ask_next_question(chat_id)
             
+    # 3. Handle messages outside of active sessions
     else:
+        # User wants to start logging
         if text == "/log":
+            # A. Fetch and display spontaneous notes first
+            try:
+                r = requests.get(f"{BACKEND_URL}/api/notes/undisplayed", timeout=5.0)
+                if r.status_code == 200:
+                    notes = r.json()
+                    if notes:
+                        notes_text = "📝 **Заметки, сохраненные в течение дня:**\n\n"
+                        note_ids = []
+                        for n in notes:
+                            note_ids.append(n["id"])
+                            try:
+                                dt = datetime.fromisoformat(n["created_at"].replace("Z", "+00:00")).astimezone(ZoneInfo("Europe/Moscow"))
+                                time_str = dt.strftime("%H:%M")
+                            except Exception:
+                                time_str = ""
+                                
+                            prefix = f"• [{time_str}] " if time_str else "• "
+                            
+                            if n["file_type"] == "text":
+                                notes_text += f"{prefix}{n['note_text']}\n"
+                            elif n["file_type"] == "voice":
+                                notes_text += f"{prefix}🎙️ Голосовая заметка\n"
+                            elif n["file_type"] == "image":
+                                notes_text += f"{prefix}📷 Фото-заметка\n"
+                            elif n["file_type"] == "video":
+                                notes_text += f"{prefix}🎥 Видео-заметка\n"
+                                
+                        send_msg(chat_id, notes_text)
+                        # Mark notes as displayed on backend
+                        requests.post(f"{BACKEND_URL}/api/notes/mark-displayed", json=note_ids, timeout=5.0)
+            except Exception as e:
+                print(f"Error fetching/displaying spontaneous notes: {e}")
+                
+            # B. Start interactive daily log questionnaire
             sessions[chat_id] = {
                 "current_step": "date",
                 "log_date": None,
@@ -1057,8 +1593,124 @@ def handle_message(chat_id, text):
                 "waiting_for_dosage_of": None
             }
             ask_next_question(chat_id)
-        else:
-            send_msg(chat_id, "Welcome to Personal Analytics Bot! 📊\n\nSend `/log` to log your day, or `/start` to register.")
+            return
+
+        # User wants to add a note explicitly via /note command
+        elif text == "/note":
+            sessions[chat_id] = {"session_type": "spontaneous_note_input"}
+            send_msg(chat_id, "✍️ Пожалуйста, введите текст спонтанной заметки:")
+            return
+
+        elif text.startswith("/note "):
+            note_content = text[6:].strip()
+            if note_content:
+                payload = {
+                    "note_text": note_content,
+                    "file_path": None,
+                    "file_type": "text"
+                }
+                try:
+                    r = requests.post(f"{BACKEND_URL}/api/notes/", json=payload, timeout=10.0)
+                    r.raise_for_status()
+                    send_msg(chat_id, "📝 Заметка сохранена!")
+                except Exception as e:
+                    send_msg(chat_id, f"❌ Не удалось сохранить заметку: {e}")
+            return
+
+        # 4. Handle spontaneous media / default text inputs outside active session
+        elif message:
+            # Voice notes
+            if message.get("voice"):
+                voice_data = message.get("voice")
+                file_id = voice_data.get("file_id")
+                timestamp = int(time.time())
+                relative_path = f"/uploads/voice/voice_{timestamp}.ogg"
+                dest_path = f"/app{relative_path}"
+                
+                success = download_telegram_file(file_id, dest_path)
+                if success:
+                    payload = {
+                        "note_text": "[Голосовое сообщение]",
+                        "file_path": relative_path,
+                        "file_type": "voice"
+                    }
+                    try:
+                        requests.post(f"{BACKEND_URL}/api/notes/", json=payload, timeout=10.0)
+                        send_msg(chat_id, "🎙️ Голосовая заметка сохранена!")
+                    except Exception as e:
+                        send_msg(chat_id, f"❌ Не удалось сохранить голосовую заметку: {e}")
+                else:
+                    send_msg(chat_id, "❌ Не удалось загрузить голосовую заметку.")
+                return
+
+            # Photos
+            elif message.get("photo"):
+                photo_list = message.get("photo")
+                file_id = photo_list[-1].get("file_id")
+                timestamp = int(time.time())
+                relative_path = f"/uploads/images/img_{timestamp}.jpg"
+                dest_path = f"/app{relative_path}"
+                
+                success = download_telegram_file(file_id, dest_path)
+                if success:
+                    sessions[chat_id] = {
+                        "session_type": "spontaneous_photo_select",
+                        "photo_path": relative_path
+                    }
+                    markup = {
+                        "inline_keyboard": [
+                            [{"text": "🍳 Завтрак", "callback_data": "meal_photo_save_Breakfast"}, {"text": "🍲 Обед", "callback_data": "meal_photo_save_Lunch"}],
+                            [{"text": "🥗 Ужин", "callback_data": "meal_photo_save_Dinner"}, {"text": "📝 Спонтанная заметка", "callback_data": "meal_photo_save_Note"}]
+                        ]
+                    }
+                    send_msg(chat_id, "📷 Кажется, вы прислали фото. Что это за изображение?", reply_markup=markup)
+                else:
+                    send_msg(chat_id, "❌ Не удалось загрузить изображение.")
+                return
+
+            # Videos or Video Notes
+            elif message.get("video") or message.get("video_note"):
+                video_data = message.get("video") or message.get("video_note")
+                file_id = video_data.get("file_id")
+                timestamp = int(time.time())
+                relative_path = f"/uploads/videos/video_{timestamp}.mp4"
+                dest_path = f"/app{relative_path}"
+                
+                success = download_telegram_file(file_id, dest_path)
+                if success:
+                    payload = {
+                        "note_text": "[Видео заметка]",
+                        "file_path": relative_path,
+                        "file_type": "video"
+                    }
+                    try:
+                        requests.post(f"{BACKEND_URL}/api/notes/", json=payload, timeout=10.0)
+                        send_msg(chat_id, "🎥 Видео-заметка сохранена!")
+                    except Exception as e:
+                        send_msg(chat_id, f"❌ Не удалось сохранить видео-заметку: {e}")
+                else:
+                    send_msg(chat_id, "❌ Не удалось загрузить видео.")
+                return
+
+            # Default text input outside session -> treat as text spontaneous note!
+            elif text and not text.startswith("/"):
+                payload = {
+                    "note_text": text,
+                    "file_path": None,
+                    "file_type": "text"
+                }
+                try:
+                    r = requests.post(f"{BACKEND_URL}/api/notes/", json=payload, timeout=10.0)
+                    r.raise_for_status()
+                    send_msg(chat_id, "📝 Заметка сохранена!")
+                except Exception as e:
+                    send_msg(chat_id, f"❌ Не удалось сохранить заметку: {e}")
+                return
+
+            # Unknown command
+            elif text.startswith("/"):
+                send_msg(chat_id, "Неизвестная команда. Доступные команды: `/log`, `/stats`, `/streak`, `/cancel`, `/note`.")
+                return
 
 def check_updates():
     """
@@ -1097,7 +1749,7 @@ def check_updates():
                     if not chat_id:
                         continue
                         
-                    handle_message(chat_id, text)
+                    handle_message(chat_id, text, message=message)
             else:
                 print(f"Updates status code error: {r.status_code}")
                 time.sleep(10)
@@ -1116,6 +1768,7 @@ def set_bot_commands():
     payload = {
         "commands": [
             {"command": "log", "description": "Начать заполнение отчета за день"},
+            {"command": "note", "description": "Сохранить спонтанную заметку (мысль, фото, видео)"},
             {"command": "stats", "description": "Посмотреть детальную статистику отчетов"},
             {"command": "streak", "description": "Посмотреть серию заполнений (streak)"},
             {"command": "cancel", "description": "Отменить текущую сессию заполнения"},
@@ -1146,6 +1799,9 @@ if __name__ == "__main__":
     scheduler = BackgroundScheduler(timezone=ZoneInfo("Europe/Moscow"))
     scheduler.add_job(send_reminder, 'cron', hour=REMINDER_HOUR, minute=0)
     scheduler.add_job(send_morning_sleep_survey, 'cron', hour=7, minute=0)
+    scheduler.add_job(send_breakfast_survey, 'cron', hour=9, minute=0)
+    scheduler.add_job(send_lunch_survey, 'cron', hour=13, minute=0)
+    scheduler.add_job(send_dinner_survey, 'cron', hour=18, minute=0)
     scheduler.start()
 
     # Start update polling in main thread

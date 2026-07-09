@@ -250,6 +250,14 @@ class APIClient:
             print(f"HTTP POST CSV Import Error: {e}")
             raise
 
+    # === Meals ===
+    def get_meals_by_date(self, target_date: date) -> List[Dict[str, Any]]:
+        return self._get("/api/meals/", params={"date_val": target_date.isoformat()})
+
+    # === Notes ===
+    def get_notes_by_date(self, target_date: date) -> List[Dict[str, Any]]:
+        return self._get("/api/notes/by-date", params={"date_val": target_date.isoformat()})
+
 api_client = APIClient()
 
 

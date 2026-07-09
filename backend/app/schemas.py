@@ -269,3 +269,65 @@ class StrengthWorkout(StrengthWorkoutBase):
         from_attributes = True
 
 
+# === Meals & Notes Schemas ===
+
+class SpontaneousNoteBase(BaseModel):
+    note_text: Optional[str] = None
+    file_path: Optional[str] = None
+    file_type: str = Field("text", max_length=20)
+
+class SpontaneousNoteCreate(SpontaneousNoteBase):
+    pass
+
+class SpontaneousNote(SpontaneousNoteBase):
+    id: int
+    created_at: datetime
+    displayed: bool
+
+    class Config:
+        from_attributes = True
+
+class FoodProductBase(BaseModel):
+    name: str = Field(..., max_length=255)
+    default_unit: str = Field("грамм", max_length=50)
+
+class FoodProductCreate(FoodProductBase):
+    pass
+
+class FoodProduct(FoodProductBase):
+    id: int
+
+    class Config:
+        from_attributes = True
+
+class MealItemBase(BaseModel):
+    product_name: str = Field(..., max_length=255)
+    quantity: float
+    unit: str = Field(..., max_length=50)
+
+class MealItemCreate(MealItemBase):
+    pass
+
+class MealItem(MealItemBase):
+    id: int
+    meal_id: int
+
+    class Config:
+        from_attributes = True
+
+class MealBase(BaseModel):
+    date: date
+    meal_type: str = Field(..., max_length=20)  # "Breakfast", "Lunch", "Dinner"
+    photo_path: Optional[str] = None
+
+class MealCreate(MealBase):
+    items: List[MealItemCreate] = []
+
+class Meal(MealBase):
+    id: int
+    items: List[MealItem] = []
+
+    class Config:
+        from_attributes = True
+
+

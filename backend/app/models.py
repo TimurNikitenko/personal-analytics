@@ -1,7 +1,12 @@
-from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Numeric, ForeignKey, text, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Float, Date, DateTime, Numeric, ForeignKey, text, UniqueConstraint, Boolean, func
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
 from backend.app.database import Base
+
+@compiles(JSONB, "sqlite")
+def compile_jsonb_sqlite(type_, compiler, **kw):
+    return "JSON"
 
 class DailyLog(Base):
     __tablename__ = "daily_logs"
@@ -17,7 +22,7 @@ class DailyLog(Base):
     workout_type = Column(String(50), nullable=True)
     exercise_snacks_count = Column(Integer, nullable=True)
     work_hours = Column(Float, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     supplements = relationship("DailySupplement", back_populates="daily_log", cascade="all, delete-orphan")
     agent_insights = relationship("AgentInsight", back_populates="daily_log", cascade="all, delete-orphan")
@@ -185,7 +190,51 @@ class AgentInsight(Base):
     agent_question = Column(String, nullable=True)
     user_answer = Column(String, nullable=True)
     compiled_insight = Column(String, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=text("now()"))
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     daily_log = relationship("DailyLog", back_populates="agent_insights")
+
+
+class Meal(Base):
+    __tablename__ = "meals"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    date = Column(Date, nullable=False)
+    meal_type = Column(String(20), nullable=False)  # "Breakfast", "Lunch", "Dinner"
+    photo_path = Column(String, nullable=True)
+
+    items = relationship("MealItem", back_populates="meal", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("date", "meal_type", name="uq_date_meal_type"),
+    )
+
+class MealItem(Base):
+    __tablename__ = "meal_items"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    meal_id = Column(Integer, ForeignKey("meals.id", ondelete="CASCADE"), nullable=False)
+    product_name = Column(String(255), nullable=False)
+    quantity = Column(Float, nullable=False)
+    unit = Column(String(50), nullable=False)
+
+    meal = relationship("Meal", back_populates="items")
+
+class FoodProduct(Base):
+    __tablename__ = "food_products"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(255), unique=True, nullable=False)
+    default_unit = Column(String(50), nullable=False, default="грамм")
+
+class SpontaneousNote(Base):
+    __tablename__ = "spontaneous_notes"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    note_text = Column(String, nullable=True)
+    file_path = Column(String, nullable=True)
+    file_type = Column(String(20), nullable=False, default="text")  # "text", "voice", "image", "video"
+    displayed = Column(Boolean, default=False, nullable=False)
+
 

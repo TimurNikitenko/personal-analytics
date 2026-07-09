@@ -34,6 +34,7 @@ services:
       - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
     volumes:
       - ./backups:/app/backups
+      - ./uploads:/app/uploads
     networks:
       - default
       - shared_agent_network
@@ -53,6 +54,8 @@ services:
       - BACKEND_URL=http://backend:8000
     depends_on:
       - backend
+    volumes:
+      - ./uploads:/app/uploads
 
   telegram_bot:
     build:
@@ -68,6 +71,8 @@ services:
       - PYTHONUNBUFFERED=1
     depends_on:
       - backend
+    volumes:
+      - ./uploads:/app/uploads
 
   caddy:
     image: caddy:2-alpine

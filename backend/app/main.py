@@ -6,8 +6,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 import pandas as pd
 
+from fastapi.staticfiles import StaticFiles
+import os
+
 from backend.app.database import engine, Base, get_db
-from backend.app.routers import daily_logs, finances, metrics, learning, goals, ml, telegram, nutrition, medical_tests, experiments, strength_workouts, agent_insights
+from backend.app.routers import daily_logs, finances, metrics, learning, goals, ml, telegram, nutrition, medical_tests, experiments, strength_workouts, agent_insights, meals, notes
 
 # Auto-create database tables on startup
 Base.metadata.create_all(bind=engine)
@@ -36,6 +39,14 @@ app.include_router(medical_tests.router, prefix="/api")
 app.include_router(experiments.router, prefix="/api")
 app.include_router(strength_workouts.router, prefix="/api")
 app.include_router(agent_insights.router, prefix="/api")
+app.include_router(meals.router, prefix="/api")
+app.include_router(notes.router, prefix="/api")
+
+# Mount static files for uploads (photos, audio, video)
+upload_dir = os.getenv("UPLOAD_DIR", "/app/uploads" if os.path.exists("/app") and os.access("/app", os.W_OK) else "./uploads")
+if not os.path.exists(upload_dir):
+    os.makedirs(upload_dir)
+app.mount("/uploads", StaticFiles(directory=upload_dir), name="uploads")
 
 
 @app.get("/")

@@ -104,8 +104,8 @@ st.sidebar.info(
 if "supplements_list" not in st.session_state:
     st.session_state.supplements_list = []
 
-# Main Page Layout: Three Tabs
-tab1, tab2, tab3 = st.tabs(["📝 Daily Questionnaire", "📈 Quick Insights & Summary", "📖 Daily Logs Explorer"])
+# Main Page Layout: Four Tabs
+tab1, tab2, tab3, tab4 = st.tabs(["📝 Daily Questionnaire", "📈 Quick Insights & Summary", "📖 Daily Logs Explorer", "🍽️ Nutrition & Notes"])
 
 # ==================== TAB 1: DAILY QUESTIONNAIRE ====================
 with tab1:
@@ -573,3 +573,98 @@ with tab3:
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to delete daily log: {e}")
+
+# ==================== TAB 4: NUTRITION & NOTES ====================
+with tab4:
+    st.subheader("🍽️ Nutrition & Spontaneous Notes Explorer")
+    
+    # Date selection
+    col_n1, col_n2 = st.columns([1, 3])
+    with col_n1:
+        nutrition_date = st.date_input("Select Date for Explorer", date.today(), key="nutrition_date_input")
+    
+    # Fetch meals and notes for that date
+    meals = []
+    notes = []
+    
+    # Get backend base URL
+    from frontend.utils.api_client import BACKEND_URL
+    
+    try:
+        meals = api_client.get_meals_by_date(nutrition_date)
+    except Exception as e:
+        st.warning(f"Could not load meals: {e}")
+        
+    try:
+        notes = api_client.get_notes_by_date(nutrition_date)
+    except Exception as e:
+        st.warning(f"Could not load notes: {e}")
+        
+    st.markdown("---")
+    
+    # Layout: two columns
+    col_left, col_right = st.columns(2)
+    
+    with col_left:
+        st.markdown("### 🍳 Food & Meals Log")
+        
+        meal_types = ["Breakfast", "Lunch", "Dinner"]
+        meal_titles = {"Breakfast": "🍳 Завтрак", "Lunch": "🍲 Обед", "Dinner": "🥗 Ужин"}
+        
+        for m_type in meal_types:
+            meal_data = next((m for m in meals if m["meal_type"] == m_type), None)
+            
+            with st.container():
+                st.markdown(f"#### {meal_titles[m_type]}")
+                if meal_data:
+                    # Display items
+                    if meal_data.get("items"):
+                        for item in meal_data["items"]:
+                            st.write(f"- **{item['product_name']}** — {item['quantity']} {item['unit']}")
+                    else:
+                        st.write("*(Нет детального списка продуктов)*")
+                        
+                    # Display photo if present
+                    if meal_data.get("photo_path"):
+                        photo_url = f"{BACKEND_URL}{meal_data['photo_path']}"
+                        st.image(photo_url, caption="Фото приема пищи", use_column_width=True)
+                else:
+                    st.write("*(Прием пищи не залоггирован)*")
+                st.markdown("")
+                
+    with col_right:
+        st.markdown("### 📝 Spontaneous Notes & Media")
+        
+        if not notes:
+            st.write("*(Заметки отсутствуют за этот день)*")
+        else:
+            for note in notes:
+                # Time formatting
+                try:
+                    dt = datetime.strptime(note["created_at"][:19], "%Y-%m-%dT%H:%M:%S")
+                    time_str = dt.strftime("%H:%M")
+                except Exception:
+                    time_str = "unknown"
+                    
+                note_card_title = f"🕒 Заметка в {time_str}"
+                with st.expander(note_card_title, expanded=True):
+                    if note["file_type"] == "text":
+                        st.write(note["note_text"])
+                        
+                    elif note["file_type"] == "image":
+                        st.write("📷 **Фото-заметка**")
+                        if note["file_path"]:
+                            photo_url = f"{BACKEND_URL}{note['file_path']}"
+                            st.image(photo_url, use_column_width=True)
+                            
+                    elif note["file_type"] == "voice":
+                        st.write("🎙️ **Голосовая заметка**")
+                        if note["file_path"]:
+                            audio_url = f"{BACKEND_URL}{note['file_path']}"
+                            st.audio(audio_url)
+                            
+                    elif note["file_type"] == "video":
+                        st.write("🎥 **Видео-заметка**")
+                        if note["file_path"]:
+                            video_url = f"{BACKEND_URL}{note['file_path']}"
+                            st.video(video_url)
