@@ -1,12 +1,28 @@
 # Caddy Configuration for Personal Analytics System
 # If you don't have a domain name, use http://78.17.109.99
-# If you have a domain name, replace http://78.17.109.99 with your domain (e.g. analytics.timur.com)
+# If you have a domain name, replace http://78.17.109.99 with your domain
+
 http://78.17.109.99 {
+
+# 1. МАРШРУТ ДЛЯ ПАНЕЛИ УПРАВЛЕНИЯ (X-UI)
+# Caddy ищет точное совпадение с вашим секретным путем.
+# Панель имеет свою встроенную авторизацию, поэтому basicauth здесь не нужен.
+handle {$PANEL_SECRET_PATH}* {
+    # Направляем трафик из докер-контейнера на порт хост-машины
+    reverse_proxy host.docker.internal:54321
+}
+
+# 2. МАРШРУТ ДЛЯ ВАШЕГО ПРОЕКТА (ФРОНТЕНД)
+# Сработает как fallback (для всех остальных запросов),
+# обеспечивая защиту ваших аналитических/биохакинг метрик.
+handle {
     basicauth {
         # Username: timur
         # The password hash is read dynamically from the environment
         timur {$BASIC_AUTH_HASH}
     }
-
     reverse_proxy frontend:8501
+}
+
+
 }

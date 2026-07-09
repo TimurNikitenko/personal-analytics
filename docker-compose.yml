@@ -10,7 +10,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-personal_analytics}"]
+      test: [ "CMD-SHELL", "pg_isready -U postgres -d ${POSTGRES_DB:-personal_analytics}" ]
       interval: 5s
       timeout: 5s
       retries: 5
@@ -83,10 +83,13 @@ services:
       - "443:443"
     environment:
       - BASIC_AUTH_HASH=${BASIC_AUTH_HASH}
+      - PANEL_SECRET_PATH=${PANEL_SECRET_PATH}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
       - caddy_config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # Позволяет Caddy видеть хост-систему
     depends_on:
       - frontend
 
@@ -98,4 +101,3 @@ volumes:
 networks:
   shared_agent_network:
     external: true
-
