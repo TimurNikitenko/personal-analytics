@@ -7,9 +7,13 @@ Bootstrap modeling, and Experiment Day management.
 import datetime
 from typing import List, Optional, Dict, Any
 from sqlalchemy.orm import Session
-from backend.app import models, schemas, crud
+from backend.app import models, schemas
 from backend.app.core.exceptions import EntityNotFoundException
 from backend.app.domains.experiments.interfaces import IExperimentRepository
+from backend.app.domains.daily_logs.repository import SQLAlchemyDailyLogRepository
+from backend.app.domains.medical.repository import SQLAlchemyMetricRepository, SQLAlchemyMedicalTestRepository
+from backend.app.domains.learning.repository import SQLAlchemyLearningRepository
+from backend.app.domains.nutrition.repository import SQLAlchemyNutritionRepository
 from backend.app.utils.statistics import (
     analyze_experiment_data,
     calculate_required_sample_size,
@@ -35,7 +39,7 @@ class ExperimentsService:
             return {}
         res = {}
         if metric_source == "daily_logs":
-            logs = crud.get_daily_logs(self.db)
+            logs = SQLAlchemyDailyLogRepository(self.db).list_logs()
             for log in logs:
                 val = None
                 if metric_name == "sleep_hours":
@@ -47,26 +51,26 @@ class ExperimentsService:
                 if val is not None:
                     res[log.date] = float(val)
         elif metric_source == "global_metrics":
-            metrics = crud.get_metrics(self.db, metric_name=metric_name)
+            metrics = SQLAlchemyMetricRepository(self.db).list_metrics(metric_name=metric_name)
             for m in metrics:
                 try:
                     res[m.date] = float(m.metric_value)
                 except (ValueError, TypeError, AttributeError):
                     pass
         elif metric_source == "learning_logs":
-            logs = crud.get_learning_logs(self.db)
+            logs = SQLAlchemyLearningRepository(self.db).list_logs()
             for log in logs:
                 val = log.learning_hours + log.practice_hours if metric_name == "total_hours" else getattr(log, metric_name, None)
                 if val is not None:
                     res[log.date] = float(val)
         elif metric_source == "daily_nutrition":
-            logs = crud.get_nutrition_logs(self.db)
+            logs = SQLAlchemyNutritionRepository(self.db).list_logs()
             for log in logs:
                 val = getattr(log, metric_name, None)
                 if val is not None:
                     res[log.date] = float(val)
         elif metric_source == "medical_tests":
-            tests = crud.get_medical_tests(self.db, test_name=metric_name)
+            tests = SQLAlchemyMedicalTestRepository(self.db).list_tests(test_name=metric_name)
             for t in tests:
                 res[t.date] = float(t.value)
         return res

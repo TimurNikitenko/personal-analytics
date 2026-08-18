@@ -2,34 +2,45 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from datetime import date
 from typing import List, Optional
-from backend.app import schemas, crud
+from backend.app import schemas
 from backend.app.database import get_db
+from backend.app.core.exceptions import EntityNotFoundException
+from backend.app.domains.agent_insights.repository import SQLAlchemyAgentInsightRepository
+from backend.app.domains.agent_insights.service import AgentInsightsService
 
 router = APIRouter(prefix="/agent-insights", tags=["Agent Insights"])
+
+def get_agent_insights_service(db: Session = Depends(get_db)) -> AgentInsightsService:
+    repo = SQLAlchemyAgentInsightRepository(db)
+    return AgentInsightsService(repo)
 
 @router.get("/", response_model=List[schemas.AgentInsight])
 @router.get("", response_model=List[schemas.AgentInsight])
 def read_agent_insights(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
-    db: Session = Depends(get_db)
+    service: AgentInsightsService = Depends(get_agent_insights_service)
 ):
-    return crud.get_agent_insights(db, start_date=start_date, end_date=end_date)
+    return service.list_insights(start_date=start_date, end_date=end_date)
 
 @router.post("/", response_model=schemas.AgentInsight)
 @router.post("", response_model=schemas.AgentInsight)
 def create_agent_insight(
     insight_in: schemas.AgentInsightCreate,
-    db: Session = Depends(get_db)
+    service: AgentInsightsService = Depends(get_agent_insights_service)
 ):
-    return crud.create_agent_insight(db, insight_in=insight_in)
+    return service.create_insight(insight_in)
 
-@router.delete("/{insight_id}")
-def delete_agent_insight(insight_id: int, db: Session = Depends(get_db)):
-    success = crud.delete_agent_insight(db, insight_id=insight_id)
-    if not success:
+@router.delete("/{insight_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_agent_insight(
+    insight_id: int,
+    service: AgentInsightsService = Depends(get_agent_insights_service)
+):
+    try:
+        service.delete_insight(insight_id)
+        return
+    except EntityNotFoundException as e:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Agent insight with ID {insight_id} not found"
+            detail=str(e)
         )
-    return {"detail": f"Agent insight with ID {insight_id} deleted successfully"}

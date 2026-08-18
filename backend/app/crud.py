@@ -1,523 +1,190 @@
+"""
+[DEPRECATED] Monolithic CRUD module.
+Maintained for backwards compatibility. All domain operations have been refactored
+into domain packages in `backend/app/domains/`.
+"""
+
+import warnings
 from sqlalchemy.orm import Session
 from datetime import date
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from backend.app import models, schemas
 
-# ==================== Daily Logs & Supplements ====================
+from backend.app.domains.daily_logs.repository import SQLAlchemyDailyLogRepository, SQLAlchemySpontaneousNoteRepository
+from backend.app.domains.daily_logs.service import DailyLogsService, NotesService
+from backend.app.domains.nutrition.repository import SQLAlchemyNutritionRepository, SQLAlchemyMealRepository
+from backend.app.domains.nutrition.service import NutritionService, MealService
+from backend.app.domains.workouts.repository import SQLAlchemyWorkoutRepository
+from backend.app.domains.workouts.service import WorkoutsService
+from backend.app.domains.finances.repository import SQLAlchemyFinanceRepository
+from backend.app.domains.finances.service import FinancesService
+from backend.app.domains.learning.repository import SQLAlchemyLearningRepository
+from backend.app.domains.learning.service import LearningService
+from backend.app.domains.medical.repository import SQLAlchemyMedicalTestRepository, SQLAlchemyMetricRepository
+from backend.app.domains.medical.service import MedicalTestsService, MetricsService
+from backend.app.domains.goals.repository import SQLAlchemyGoalRepository
+from backend.app.domains.goals.service import GoalsService
+from backend.app.domains.experiments.repository import SQLAlchemyExperimentRepository
+from backend.app.domains.experiments.service import ExperimentsService
+from backend.app.domains.agent_insights.repository import SQLAlchemyAgentInsightRepository
+from backend.app.domains.agent_insights.service import AgentInsightsService
 
+def _warn_deprecated():
+    warnings.warn(
+        "backend.app.crud is deprecated. Use domain services in backend.app.domains instead.",
+        DeprecationWarning,
+        stacklevel=2
+    )
+
+# Daily Logs & Notes
 def get_daily_log(db: Session, log_date: date) -> Optional[models.DailyLog]:
-    return db.query(models.DailyLog).filter(models.DailyLog.date == log_date).first()
+    return SQLAlchemyDailyLogRepository(db).get_by_date(log_date)
 
 def get_daily_logs(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.DailyLog]:
-    query = db.query(models.DailyLog)
-    if start_date:
-        query = query.filter(models.DailyLog.date >= start_date)
-    if end_date:
-        query = query.filter(models.DailyLog.date <= end_date)
-    return query.order_by(models.DailyLog.date.desc()).all()
+    return SQLAlchemyDailyLogRepository(db).list_logs(start_date=start_date, end_date=end_date)
 
 def upsert_daily_log(db: Session, log_in: schemas.DailyLogCreate) -> models.DailyLog:
-    db_log = get_daily_log(db, log_in.date)
-    
-    if db_log:
-        # Update existing - only update fields that were explicitly set in the request
-        log_data = log_in.model_dump(exclude={"supplements"}, exclude_unset=True)
-        for key, value in log_data.items():
-            setattr(db_log, key, value)
-    else:
-        # Create new - include all fields
-        log_data = log_in.model_dump(exclude={"supplements"})
-        db_log = models.DailyLog(**log_data)
-        db.add(db_log)
-    
-    db.commit()
-    db.refresh(db_log)
-    
-    # Handle supplements: only delete old ones and add new ones if supplements were explicitly provided
-    if "supplements" in log_in.model_fields_set:
-        db.query(models.DailySupplement).filter(models.DailySupplement.date == log_in.date).delete()
-        
-        for supp_in in log_in.supplements:
-            db_supp = models.DailySupplement(
-                date=log_in.date,
-                name=supp_in.name,
-                dosage=supp_in.dosage,
-                unit=supp_in.unit
-            )
-            db.add(db_supp)
-            
-        db.commit()
-        db.refresh(db_log)
-    return db_log
+    return SQLAlchemyDailyLogRepository(db).upsert(log_in)
 
 def delete_daily_log(db: Session, log_date: date) -> bool:
-    db_log = get_daily_log(db, log_date)
-    if db_log:
-        db.delete(db_log)
-        db.commit()
-        return True
-    return False
-
-# ==================== Finances ====================
-
-def create_finance_entry(db: Session, finance_in: schemas.FinanceCreate) -> models.Finance:
-    db_finance = models.Finance(**finance_in.model_dump())
-    db.add(db_finance)
-    db.commit()
-    db.refresh(db_finance)
-    return db_finance
-
-def bulk_create_finance_entries(db: Session, finance_ins: List[schemas.FinanceCreate]) -> List[models.Finance]:
-    db_entries = [models.Finance(**entry.model_dump()) for entry in finance_ins]
-    db.add_all(db_entries)
-    db.commit()
-    return db_entries
-
-def get_finances(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.Finance]:
-    query = db.query(models.Finance)
-    if start_date:
-        query = query.filter(models.Finance.date >= start_date)
-    if end_date:
-        query = query.filter(models.Finance.date <= end_date)
-    return query.order_by(models.Finance.date.desc()).all()
-
-def delete_finance_entry(db: Session, finance_id: int) -> bool:
-    db_finance = db.query(models.Finance).filter(models.Finance.id == finance_id).first()
-    if db_finance:
-        db.delete(db_finance)
-        db.commit()
-        return True
-    return False
-
-# ==================== Global Metrics ====================
-
-def create_metric_entry(db: Session, metric_in: schemas.GlobalMetricCreate) -> models.GlobalMetric:
-    db_metric = db.query(models.GlobalMetric).filter(
-        models.GlobalMetric.date == metric_in.date,
-        models.GlobalMetric.metric_name == metric_in.metric_name
-    ).first()
-    
-    if db_metric:
-        db_metric.metric_value = metric_in.metric_value
-        db_metric.notes = metric_in.notes
-    else:
-        db_metric = models.GlobalMetric(**metric_in.model_dump())
-        db.add(db_metric)
-        
-    db.commit()
-    db.refresh(db_metric)
-    return db_metric
-
-def get_metrics(db: Session, metric_name: Optional[str] = None, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.GlobalMetric]:
-    query = db.query(models.GlobalMetric)
-    if metric_name:
-        query = query.filter(models.GlobalMetric.metric_name == metric_name)
-    if start_date:
-        query = query.filter(models.GlobalMetric.date >= start_date)
-    if end_date:
-        query = query.filter(models.GlobalMetric.date <= end_date)
-    return query.order_by(models.GlobalMetric.date.desc()).all()
-
-def get_metric_names(db: Session) -> List[str]:
-    results = db.query(models.GlobalMetric.metric_name).distinct().all()
-    return [r[0] for r in results]
-
-# ==================== Learning Logs ====================
-
-def create_learning_entry(db: Session, learning_in: schemas.LearningLogCreate) -> models.LearningLog:
-    db_learning = models.LearningLog(**learning_in.model_dump())
-    db.add(db_learning)
-    db.commit()
-    db.refresh(db_learning)
-    return db_learning
-
-def get_learning_logs(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.LearningLog]:
-    query = db.query(models.LearningLog)
-    if start_date:
-        query = query.filter(models.LearningLog.date >= start_date)
-    if end_date:
-        query = query.filter(models.LearningLog.date <= end_date)
-    return query.order_by(models.LearningLog.date.desc()).all()
-
-def delete_learning_entry(db: Session, learning_id: int) -> bool:
-    db_learning = db.query(models.LearningLog).filter(models.LearningLog.id == learning_id).first()
-    if db_learning:
-        db.delete(db_learning)
-        db.commit()
-        return True
-    return False
-
-# ==================== Goals ====================
-
-def create_goal(db: Session, goal_in: schemas.GoalCreate) -> models.Goal:
-    db_goal = models.Goal(**goal_in.model_dump())
-    db.add(db_goal)
-    db.commit()
-    db.refresh(db_goal)
-    return db_goal
-
-def get_goals(db: Session, status: Optional[str] = None) -> List[models.Goal]:
-    query = db.query(models.Goal)
-    if status:
-        query = query.filter(models.Goal.status == status)
-    return query.order_by(models.Goal.end_date.asc()).all()
-
-def update_goal(db: Session, goal_id: int, goal_in: schemas.GoalCreate) -> Optional[models.Goal]:
-    db_goal = db.query(models.Goal).filter(models.Goal.id == goal_id).first()
-    if db_goal:
-        for key, value in goal_in.model_dump().items():
-            setattr(db_goal, key, value)
-        db.commit()
-        db.refresh(db_goal)
-        return db_goal
-    return None
-
-def delete_goal(db: Session, goal_id: int) -> bool:
-    db_goal = db.query(models.Goal).filter(models.Goal.id == goal_id).first()
-    if db_goal:
-        db.delete(db_goal)
-        db.commit()
-        return True
-    return False
-
-# ==================== Nutrition ====================
-
-def get_nutrition_log(db: Session, log_date: date) -> Optional[models.DailyNutrition]:
-    return db.query(models.DailyNutrition).filter(models.DailyNutrition.date == log_date).first()
-
-def get_nutrition_logs(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.DailyNutrition]:
-    query = db.query(models.DailyNutrition)
-    if start_date:
-        query = query.filter(models.DailyNutrition.date >= start_date)
-    if end_date:
-        query = query.filter(models.DailyNutrition.date <= end_date)
-    return query.order_by(models.DailyNutrition.date.desc()).all()
-
-def upsert_nutrition_log(db: Session, nutrition_in: schemas.DailyNutritionCreate) -> models.DailyNutrition:
-    db_nut = get_nutrition_log(db, nutrition_in.date)
-    
-    nut_data = nutrition_in.model_dump()
-    
-    # Auto-calculate caffeine
-    cups = nut_data.get("coffee_cups") or 0.0
-    coffee_type = nut_data.get("coffee_type") or "Filter"
-    mapping = {
-        "Espresso": 63.0,
-        "Filter": 95.0,
-        "Instant": 63.0,
-        "Decaf": 3.0
-    }
-    nut_data["caffeine_mg"] = cups * mapping.get(coffee_type, 95.0)
-
-    if db_nut:
-        for key, value in nut_data.items():
-            setattr(db_nut, key, value)
-    else:
-        db_nut = models.DailyNutrition(**nut_data)
-        db.add(db_nut)
-        
-    db.commit()
-    db.refresh(db_nut)
-    return db_nut
-
-def delete_nutrition_log(db: Session, log_date: date) -> bool:
-    db_nut = get_nutrition_log(db, log_date)
-    if db_nut:
-        db.delete(db_nut)
-        db.commit()
-        return True
-    return False
-
-# ==================== Medical Tests ====================
-
-def get_medical_tests(
-    db: Session, 
-    start_date: Optional[date] = None, 
-    end_date: Optional[date] = None,
-    test_name: Optional[str] = None
-) -> List[models.MedicalTest]:
-    query = db.query(models.MedicalTest)
-    if start_date:
-        query = query.filter(models.MedicalTest.date >= start_date)
-    if end_date:
-        query = query.filter(models.MedicalTest.date <= end_date)
-    if test_name:
-        query = query.filter(models.MedicalTest.test_name == test_name)
-    return query.order_by(models.MedicalTest.date.desc(), models.MedicalTest.test_name.asc()).all()
-
-def upsert_medical_test(db: Session, test_in: schemas.MedicalTestCreate) -> models.MedicalTest:
-    db_test = db.query(models.MedicalTest).filter(
-        models.MedicalTest.date == test_in.date,
-        models.MedicalTest.test_name == test_in.test_name
-    ).first()
-    
-    test_data = test_in.model_dump()
-    
-    if db_test:
-        for key, value in test_data.items():
-            setattr(db_test, key, value)
-    else:
-        db_test = models.MedicalTest(**test_data)
-        db.add(db_test)
-        
-    db.commit()
-    db.refresh(db_test)
-    return db_test
-
-def delete_medical_test(db: Session, test_id: int) -> bool:
-    db_test = db.query(models.MedicalTest).filter(models.MedicalTest.id == test_id).first()
-    if db_test:
-        db.delete(db_test)
-        db.commit()
-        return True
-    return False
-
-
-# ==================== Experiments ====================
-
-def create_experiment(db: Session, experiment_in: schemas.ExperimentCreate) -> models.Experiment:
-    db_experiment = models.Experiment(**experiment_in.model_dump())
-    db.add(db_experiment)
-    db.commit()
-    db.refresh(db_experiment)
-    return db_experiment
-
-def get_experiment(db: Session, experiment_id: int) -> Optional[models.Experiment]:
-    return db.query(models.Experiment).filter(models.Experiment.id == experiment_id).first()
-
-def get_experiments(db: Session, status: Optional[str] = None) -> List[models.Experiment]:
-    query = db.query(models.Experiment)
-    if status:
-        query = query.filter(models.Experiment.status == status)
-    return query.order_by(models.Experiment.start_date.desc()).all()
-
-def update_experiment(db: Session, experiment_id: int, experiment_in: schemas.ExperimentUpdate) -> Optional[models.Experiment]:
-    db_experiment = get_experiment(db, experiment_id)
-    if db_experiment:
-        update_data = experiment_in.model_dump(exclude_unset=True)
-        for key, value in update_data.items():
-            setattr(db_experiment, key, value)
-        db.commit()
-        db.refresh(db_experiment)
-        return db_experiment
-    return None
-
-def delete_experiment(db: Session, experiment_id: int) -> bool:
-    db_experiment = get_experiment(db, experiment_id)
-    if db_experiment:
-        db.delete(db_experiment)
-        db.commit()
-        return True
-    return False
-
-# ==================== Experiment Days ====================
-
-def upsert_experiment_day(db: Session, experiment_id: int, day_in: schemas.ExperimentDayCreate) -> models.ExperimentDay:
-    db_day = db.query(models.ExperimentDay).filter(
-        models.ExperimentDay.experiment_id == experiment_id,
-        models.ExperimentDay.date == day_in.date
-    ).first()
-    
-    day_data = day_in.model_dump()
-    day_data["experiment_id"] = experiment_id
-    
-    if db_day:
-        for key, value in day_data.items():
-            setattr(db_day, key, value)
-    else:
-        db_day = models.ExperimentDay(**day_data)
-        db.add(db_day)
-        
-    db.commit()
-    db.refresh(db_day)
-    return db_day
-
-def get_experiment_days(db: Session, experiment_id: int) -> List[models.ExperimentDay]:
-    return db.query(models.ExperimentDay).filter(
-        models.ExperimentDay.experiment_id == experiment_id
-    ).order_by(models.ExperimentDay.date.asc()).all()
-
-def delete_experiment_day(db: Session, experiment_id: int, date_val: date) -> bool:
-    db_day = db.query(models.ExperimentDay).filter(
-        models.ExperimentDay.experiment_id == experiment_id,
-        models.ExperimentDay.date == date_val
-    ).first()
-    if db_day:
-        db.delete(db_day)
-        db.commit()
-        return True
-    return False
-
-
-# ==================== Strength Workouts ====================
-
-def get_strength_workout(db: Session, workout_id: int) -> Optional[models.StrengthWorkout]:
-    return db.query(models.StrengthWorkout).filter(models.StrengthWorkout.id == workout_id).first()
-
-def get_strength_workouts(
-    db: Session, 
-    start_date: Optional[date] = None, 
-    end_date: Optional[date] = None
-) -> List[models.StrengthWorkout]:
-    query = db.query(models.StrengthWorkout)
-    if start_date:
-        query = query.filter(models.StrengthWorkout.date >= start_date)
-    if end_date:
-        from datetime import datetime, time
-        end_dt = datetime.combine(end_date, time(23, 59, 59))
-        query = query.filter(models.StrengthWorkout.date <= end_dt)
-    return query.order_by(models.StrengthWorkout.date.desc()).all()
-
-def create_strength_workout(db: Session, workout_in: schemas.StrengthWorkoutCreate) -> models.StrengthWorkout:
-    db_workout = models.StrengthWorkout(
-        workout_num=workout_in.workout_num,
-        date=workout_in.date,
-        name=workout_in.name,
-        duration_seconds=workout_in.duration_seconds,
-        notes=workout_in.notes
-    )
-    db.add(db_workout)
-    db.commit()
-    db.refresh(db_workout)
-
-    for set_in in workout_in.sets:
-        db_set = models.WorkoutSet(
-            workout_id=db_workout.id,
-            exercise_name=set_in.exercise_name,
-            set_order=set_in.set_order,
-            weight_kg=set_in.weight_kg,
-            reps=set_in.reps,
-            rpe=set_in.rpe,
-            distance_meters=set_in.distance_meters,
-            seconds=set_in.seconds,
-            notes=set_in.notes
-        )
-        db.add(db_set)
-
-    db.commit()
-    db.refresh(db_workout)
-    return db_workout
-
-def delete_strength_workout(db: Session, workout_id: int) -> bool:
-    db_workout = get_strength_workout(db, workout_id)
-    if db_workout:
-        db.delete(db_workout)
-        db.commit()
-        return True
-    return False
-
-
-# ==================== Agent Insights ====================
-
-def create_agent_insight(db: Session, insight_in: schemas.AgentInsightCreate) -> models.AgentInsight:
-    db_insight = models.AgentInsight(**insight_in.model_dump())
-    db.add(db_insight)
-    db.commit()
-    db.refresh(db_insight)
-    return db_insight
-
-def get_agent_insights(
-    db: Session, 
-    start_date: Optional[date] = None, 
-    end_date: Optional[date] = None
-) -> List[models.AgentInsight]:
-    query = db.query(models.AgentInsight)
-    if start_date:
-        query = query.filter(models.AgentInsight.date >= start_date)
-    if end_date:
-        query = query.filter(models.AgentInsight.date <= end_date)
-    return query.order_by(models.AgentInsight.date.desc(), models.AgentInsight.created_at.desc()).all()
-
-def delete_agent_insight(db: Session, insight_id: int) -> bool:
-    db_insight = db.query(models.AgentInsight).filter(models.AgentInsight.id == insight_id).first()
-    if db_insight:
-        db.delete(db_insight)
-        db.commit()
-        return True
-    return False
-
-
-# ==================== Spontaneous Notes ====================
+    return SQLAlchemyDailyLogRepository(db).delete(log_date)
 
 def create_spontaneous_note(db: Session, note_in: schemas.SpontaneousNoteCreate) -> models.SpontaneousNote:
-    db_note = models.SpontaneousNote(**note_in.model_dump())
-    db.add(db_note)
-    db.commit()
-    db.refresh(db_note)
-    return db_note
+    return SQLAlchemySpontaneousNoteRepository(db).create(note_in)
 
 def get_undisplayed_notes(db: Session) -> List[models.SpontaneousNote]:
-    return db.query(models.SpontaneousNote).filter(models.SpontaneousNote.displayed == False).order_by(models.SpontaneousNote.created_at.asc()).all()
+    return SQLAlchemySpontaneousNoteRepository(db).get_undisplayed()
 
 def get_spontaneous_notes_by_date(db: Session, target_date: date) -> List[models.SpontaneousNote]:
-    from sqlalchemy import cast, Date
-    return db.query(models.SpontaneousNote).filter(cast(models.SpontaneousNote.created_at, Date) == target_date).order_by(models.SpontaneousNote.created_at.asc()).all()
+    return SQLAlchemySpontaneousNoteRepository(db).get_by_date(target_date)
 
 def mark_notes_as_displayed(db: Session, note_ids: List[int]) -> bool:
-    db.query(models.SpontaneousNote).filter(models.SpontaneousNote.id.in_(note_ids)).update({"displayed": True}, synchronize_session=False)
-    db.commit()
-    return True
+    return SQLAlchemySpontaneousNoteRepository(db).mark_displayed(note_ids)
 
-# ==================== Food Products ====================
+# Nutrition & Meals
+def get_nutrition_log(db: Session, log_date: date) -> Optional[models.DailyNutrition]:
+    return SQLAlchemyNutritionRepository(db).get_by_date(log_date)
+
+def get_nutrition_logs(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.DailyNutrition]:
+    return SQLAlchemyNutritionRepository(db).list_logs(start_date=start_date, end_date=end_date)
+
+def upsert_nutrition_log(db: Session, nutrition_in: schemas.DailyNutritionCreate) -> models.DailyNutrition:
+    return SQLAlchemyNutritionRepository(db).upsert(nutrition_in)
+
+def delete_nutrition_log(db: Session, log_date: date) -> bool:
+    return SQLAlchemyNutritionRepository(db).delete(log_date)
 
 def get_food_products(db: Session) -> List[models.FoodProduct]:
-    return db.query(models.FoodProduct).order_by(models.FoodProduct.name.asc()).all()
+    return SQLAlchemyMealRepository(db).get_food_products()
 
 def create_food_product(db: Session, product_in: schemas.FoodProductCreate) -> models.FoodProduct:
-    existing = db.query(models.FoodProduct).filter(models.FoodProduct.name == product_in.name).first()
-    if existing:
-        return existing
-    db_product = models.FoodProduct(**product_in.model_dump())
-    db.add(db_product)
-    db.commit()
-    db.refresh(db_product)
-    return db_product
-
-# ==================== Meals & Nutrition ====================
+    return SQLAlchemyMealRepository(db).create_food_product(product_in)
 
 def get_meals_by_date(db: Session, target_date: date) -> List[models.Meal]:
-    return db.query(models.Meal).filter(models.Meal.date == target_date).order_by(models.Meal.meal_type.asc()).all()
+    return SQLAlchemyMealRepository(db).get_by_date(target_date)
 
 def upsert_meal(db: Session, meal_in: schemas.MealCreate) -> models.Meal:
-    db_meal = db.query(models.Meal).filter(
-        models.Meal.date == meal_in.date,
-        models.Meal.meal_type == meal_in.meal_type
-    ).first()
+    return SQLAlchemyMealRepository(db).upsert_meal(meal_in)
 
-    if db_meal:
-        if meal_in.photo_path is not None:
-            db_meal.photo_path = meal_in.photo_path
-        db.commit()
-        db.refresh(db_meal)
-    else:
-        db_meal = models.Meal(
-            date=meal_in.date,
-            meal_type=meal_in.meal_type,
-            photo_path=meal_in.photo_path
-        )
-        db.add(db_meal)
-        db.commit()
-        db.refresh(db_meal)
+# Workouts
+def get_strength_workouts(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.StrengthWorkout]:
+    return SQLAlchemyWorkoutRepository(db).list_workouts(start_date=start_date, end_date=end_date)
 
-    # Overwrite items
-    db.query(models.MealItem).filter(models.MealItem.meal_id == db_meal.id).delete()
+def get_strength_workout(db: Session, workout_id: int) -> Optional[models.StrengthWorkout]:
+    return SQLAlchemyWorkoutRepository(db).get_by_id(workout_id)
 
-    for item_in in meal_in.items:
-        db_item = models.MealItem(
-            meal_id=db_meal.id,
-            product_name=item_in.product_name,
-            quantity=item_in.quantity,
-            unit=item_in.unit
-        )
-        db.add(db_item)
-        
-        # Auto-create food product if not exists
-        create_food_product(db, schemas.FoodProductCreate(name=item_in.product_name, default_unit=item_in.unit))
+def create_strength_workout(db: Session, workout_in: schemas.StrengthWorkoutCreate) -> models.StrengthWorkout:
+    return SQLAlchemyWorkoutRepository(db).create_workout(workout_in)
 
-    db.commit()
-    db.refresh(db_meal)
-    return db_meal
+def delete_strength_workout(db: Session, workout_id: int) -> bool:
+    return SQLAlchemyWorkoutRepository(db).delete_workout(workout_id)
 
+# Finances
+def get_finances(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.Finance]:
+    return SQLAlchemyFinanceRepository(db).list_entries(start_date=start_date, end_date=end_date)
 
+def create_finance_entry(db: Session, finance_in: schemas.FinanceCreate) -> models.Finance:
+    return SQLAlchemyFinanceRepository(db).create_entry(finance_in)
 
+def bulk_create_finance_entries(db: Session, finance_ins: List[schemas.FinanceCreate]) -> List[models.Finance]:
+    return SQLAlchemyFinanceRepository(db).bulk_create_entries(finance_ins)
 
+def delete_finance_entry(db: Session, finance_id: int) -> bool:
+    return SQLAlchemyFinanceRepository(db).delete_entry(finance_id)
+
+# Learning
+def get_learning_logs(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.LearningLog]:
+    return SQLAlchemyLearningRepository(db).list_logs(start_date=start_date, end_date=end_date)
+
+def create_learning_entry(db: Session, learning_in: schemas.LearningLogCreate) -> models.LearningLog:
+    return SQLAlchemyLearningRepository(db).create_entry(learning_in)
+
+def delete_learning_entry(db: Session, learning_id: int) -> bool:
+    return SQLAlchemyLearningRepository(db).delete_entry(learning_id)
+
+# Medical Tests & Metrics
+def get_medical_tests(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None, test_name: Optional[str] = None) -> List[models.MedicalTest]:
+    return SQLAlchemyMedicalTestRepository(db).list_tests(start_date=start_date, end_date=end_date, test_name=test_name)
+
+def upsert_medical_test(db: Session, test_in: schemas.MedicalTestCreate) -> models.MedicalTest:
+    return SQLAlchemyMedicalTestRepository(db).upsert_test(test_in)
+
+def delete_medical_test(db: Session, test_id: int) -> bool:
+    return SQLAlchemyMedicalTestRepository(db).delete_test(test_id)
+
+def get_metrics(db: Session, metric_name: Optional[str] = None, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.GlobalMetric]:
+    return SQLAlchemyMetricRepository(db).list_metrics(metric_name=metric_name, start_date=start_date, end_date=end_date)
+
+def get_metric_names(db: Session) -> List[str]:
+    return SQLAlchemyMetricRepository(db).get_metric_names()
+
+def create_metric_entry(db: Session, metric_in: schemas.GlobalMetricCreate) -> models.GlobalMetric:
+    return SQLAlchemyMetricRepository(db).create_metric(metric_in)
+
+# Goals
+def get_goals(db: Session, status: Optional[str] = None) -> List[models.Goal]:
+    return SQLAlchemyGoalRepository(db).list_goals(status=status)
+
+def create_goal(db: Session, goal_in: schemas.GoalCreate) -> models.Goal:
+    return SQLAlchemyGoalRepository(db).create_goal(goal_in)
+
+def update_goal(db: Session, goal_id: int, goal_in: schemas.GoalCreate) -> Optional[models.Goal]:
+    return SQLAlchemyGoalRepository(db).update_goal(goal_id, goal_in)
+
+def delete_goal(db: Session, goal_id: int) -> bool:
+    return SQLAlchemyGoalRepository(db).delete_goal(goal_id)
+
+# Experiments
+def get_experiments(db: Session, status: Optional[str] = None) -> List[models.Experiment]:
+    return SQLAlchemyExperimentRepository(db).list_experiments(status=status)
+
+def get_experiment(db: Session, experiment_id: int) -> Optional[models.Experiment]:
+    return SQLAlchemyExperimentRepository(db).get_by_id(experiment_id)
+
+def create_experiment(db: Session, experiment_in: schemas.ExperimentCreate) -> models.Experiment:
+    return SQLAlchemyExperimentRepository(db).create_experiment(experiment_in)
+
+def update_experiment(db: Session, experiment_id: int, experiment_in: schemas.ExperimentUpdate) -> Optional[models.Experiment]:
+    return SQLAlchemyExperimentRepository(db).update_experiment(experiment_id, experiment_in)
+
+def delete_experiment(db: Session, experiment_id: int) -> bool:
+    return SQLAlchemyExperimentRepository(db).delete_experiment(experiment_id)
+
+def get_experiment_days(db: Session, experiment_id: int) -> List[models.ExperimentDay]:
+    return SQLAlchemyExperimentRepository(db).list_days(experiment_id)
+
+def upsert_experiment_day(db: Session, experiment_id: int, day_in: schemas.ExperimentDayCreate) -> models.ExperimentDay:
+    return SQLAlchemyExperimentRepository(db).upsert_day(experiment_id, day_in)
+
+def delete_experiment_day(db: Session, experiment_id: int, date_val: date) -> bool:
+    return SQLAlchemyExperimentRepository(db).delete_day(experiment_id, date_val)
+
+# Agent Insights
+def get_agent_insights(db: Session, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[models.AgentInsight]:
+    return SQLAlchemyAgentInsightRepository(db).list_insights(start_date=start_date, end_date=end_date)
+
+def create_agent_insight(db: Session, insight_in: schemas.AgentInsightCreate) -> models.AgentInsight:
+    return SQLAlchemyAgentInsightRepository(db).create_insight(insight_in)
+
+def delete_agent_insight(db: Session, insight_id: int) -> bool:
+    return SQLAlchemyAgentInsightRepository(db).delete_insight(insight_id)
