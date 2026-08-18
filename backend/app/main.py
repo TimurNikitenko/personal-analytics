@@ -12,10 +12,14 @@ import os
 from backend.app.database import engine, Base, get_db
 from backend.app.routers import daily_logs, finances, metrics, learning, goals, ml, telegram, nutrition, medical_tests, experiments, strength_workouts, agent_insights, meals, notes
 
-# Auto-create database tables on startup
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(title="Personal Analytics API", version="1.0.0")
+
+@app.on_event("startup")
+def on_startup():
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"Database initialization deferred or failed: {e}")
 
 # Setup CORS middleware
 app.add_middleware(
