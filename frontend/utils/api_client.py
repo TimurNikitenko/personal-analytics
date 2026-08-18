@@ -1,49 +1,13 @@
-import os
-import httpx
-from datetime import date, datetime
+"""
+Unified APIClient for Frontend.
+Inherits from BaseHTTPClient and delegates to modular domain endpoints.
+"""
+
+from datetime import date
 from typing import List, Dict, Any, Optional
+from frontend.utils.clients.base import BaseHTTPClient
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-
-class APIClient:
-    def __init__(self, base_url: str = BACKEND_URL):
-        self.base_url = base_url
-
-    def _get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Any:
-        try:
-            response = httpx.get(f"{self.base_url}{endpoint}", params=params, timeout=10.0)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            print(f"HTTP GET Error on {endpoint}: {e}")
-            raise
-
-    def _post(self, endpoint: str, json_data: Any) -> Any:
-        try:
-            response = httpx.post(f"{self.base_url}{endpoint}", json=json_data, timeout=10.0)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            print(f"HTTP POST Error on {endpoint}: {e}")
-            raise
-
-    def _put(self, endpoint: str, json_data: Any) -> Any:
-        try:
-            response = httpx.put(f"{self.base_url}{endpoint}", json=json_data, timeout=10.0)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            print(f"HTTP PUT Error on {endpoint}: {e}")
-            raise
-
-    def _delete(self, endpoint: str) -> None:
-        try:
-            response = httpx.delete(f"{self.base_url}{endpoint}", timeout=10.0)
-            response.raise_for_status()
-        except httpx.HTTPError as e:
-            print(f"HTTP DELETE Error on {endpoint}: {e}")
-            raise
-
+class APIClient(BaseHTTPClient):
     # === Daily Logs ===
     def get_daily_logs(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
         params = {}
@@ -128,11 +92,7 @@ class APIClient:
     def delete_goal(self, goal_id: int) -> None:
         self._delete(f"/api/goals/{goal_id}")
 
-    # === Export ===
-    def get_export_url(self) -> str:
-        return f"{self.base_url}/api/export"
-
-    # === Machine Learning ===
+    # === ML Dataset ===
     def get_ml_dataset(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
         params = {}
         if start_date:
@@ -141,11 +101,7 @@ class APIClient:
             params["end_date"] = end_date.isoformat()
         return self._get("/api/ml/dataset", params=params)
 
-    # === Telegram Bot ===
-    def send_telegram_test_reminder(self) -> Dict[str, Any]:
-        return self._post("/api/telegram/test-reminder", json_data={})
-
-    # === Nutrition ===
+    # === Nutrition & Meals ===
     def get_nutrition_logs(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
         params = {}
         if start_date:
@@ -167,12 +123,7 @@ class APIClient:
         self._delete(f"/api/nutrition/{log_date.isoformat()}")
 
     # === Medical Tests ===
-    def get_medical_tests(
-        self, 
-        start_date: Optional[date] = None, 
-        end_date: Optional[date] = None,
-        test_name: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    def get_medical_tests(self, start_date: Optional[date] = None, end_date: Optional[date] = None, test_name: Optional[str] = None) -> List[Dict[str, Any]]:
         params = {}
         if start_date:
             params["start_date"] = start_date.isoformat()
@@ -207,21 +158,19 @@ class APIClient:
     def delete_experiment(self, experiment_id: int) -> None:
         self._delete(f"/api/experiments/{experiment_id}")
 
-    # === Experiment Days ===
     def get_experiment_days(self, experiment_id: int) -> List[Dict[str, Any]]:
         return self._get(f"/api/experiments/{experiment_id}/days")
 
-    def upsert_experiment_day(self, experiment_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    def log_experiment_day(self, experiment_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._post(f"/api/experiments/{experiment_id}/days", json_data=data)
 
-    def delete_experiment_day(self, experiment_id: int, date_str: str) -> None:
-        self._delete(f"/api/experiments/{experiment_id}/days/{date_str}")
+    def delete_experiment_day(self, experiment_id: int, date_val: date) -> None:
+        self._delete(f"/api/experiments/{experiment_id}/days/{date_val.isoformat()}")
 
-    # === Statistical Analysis ===
     def analyze_experiment(self, experiment_id: int) -> Dict[str, Any]:
         return self._get(f"/api/experiments/{experiment_id}/analyze")
 
-    def get_metric_baseline_stats(self, metric_source: str, metric_name: str) -> Dict[str, Any]:
+    def get_baseline_stats(self, metric_source: str, metric_name: str) -> Dict[str, Any]:
         params = {"metric_source": metric_source, "metric_name": metric_name}
         return self._get("/api/experiments/helpers/baseline-stats", params=params)
 
@@ -240,24 +189,49 @@ class APIClient:
     def delete_strength_workout(self, workout_id: int) -> None:
         self._delete(f"/api/strength-workouts/{workout_id}")
 
-    def import_strength_workouts_csv(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
+    def import_workouts_csv(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         files = {"file": (filename, file_bytes, "text/csv")}
-        try:
-            response = httpx.post(f"{self.base_url}/api/strength-workouts/import", files=files, timeout=30.0)
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            print(f"HTTP POST CSV Import Error: {e}")
-            raise
+        return self._post("/api/strength-workouts/import", files=files)
 
-    # === Meals ===
-    def get_meals_by_date(self, target_date: date) -> List[Dict[str, Any]]:
-        return self._get("/api/meals/", params={"date_val": target_date.isoformat()})
+    # === Spontaneous Notes ===
+    def create_spontaneous_note(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._post("/api/notes/", json_data=data)
 
-    # === Notes ===
-    def get_notes_by_date(self, target_date: date) -> List[Dict[str, Any]]:
-        return self._get("/api/notes/by-date", params={"date_val": target_date.isoformat()})
+    def get_undisplayed_notes(self) -> List[Dict[str, Any]]:
+        return self._get("/api/notes/undisplayed")
 
-api_client = APIClient()
+    def get_notes_by_date(self, date_val: date) -> List[Dict[str, Any]]:
+        params = {"date_val": date_val.isoformat()}
+        return self._get("/api/notes/by-date", params=params)
 
+    def mark_notes_displayed(self, note_ids: List[int]) -> Dict[str, Any]:
+        return self._post("/api/notes/mark-displayed", json_data=note_ids)
 
+    # === Meals & Food Products ===
+    def get_food_products(self) -> List[Dict[str, Any]]:
+        return self._get("/api/meals/food-products")
+
+    def create_food_product(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._post("/api/meals/food-products", json_data=data)
+
+    def get_meals_by_date(self, date_val: date) -> List[Dict[str, Any]]:
+        params = {"date_val": date_val.isoformat()}
+        return self._get("/api/meals/", params=params)
+
+    def create_meal(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._post("/api/meals/", json_data=data)
+
+    # === Agent Insights ===
+    def get_agent_insights(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
+        params = {}
+        if start_date:
+            params["start_date"] = start_date.isoformat()
+        if end_date:
+            params["end_date"] = end_date.isoformat()
+        return self._get("/api/agent-insights/", params=params)
+
+    def create_agent_insight(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self._post("/api/agent-insights/", json_data=data)
+
+    def delete_agent_insight(self, insight_id: int) -> None:
+        self._delete(f"/api/agent-insights/{insight_id}")
