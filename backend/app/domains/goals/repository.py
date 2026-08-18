@@ -15,7 +15,7 @@ class SQLAlchemyGoalRepository(IGoalRepository):
         query = self.db.query(models.Goal)
         if status:
             query = query.filter(models.Goal.status == status)
-        return query.order_by(models.Goal.created_at.desc()).all()
+        return query.order_by(models.Goal.start_date.desc()).all()
 
     def get_by_id(self, goal_id: int) -> Optional[models.Goal]:
         return self.db.query(models.Goal).filter(models.Goal.id == goal_id).first()
