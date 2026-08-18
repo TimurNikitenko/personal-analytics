@@ -3,9 +3,11 @@ Unified APIClient for Frontend.
 Inherits from BaseHTTPClient and delegates to modular domain endpoints.
 """
 
+import os
 from datetime import date
 from typing import List, Dict, Any, Optional
-from frontend.utils.clients.base import BaseHTTPClient
+import httpx
+from frontend.utils.clients.base import BaseHTTPClient, BACKEND_URL
 
 class APIClient(BaseHTTPClient):
     # === Daily Logs ===
@@ -92,6 +94,10 @@ class APIClient(BaseHTTPClient):
     def delete_goal(self, goal_id: int) -> None:
         self._delete(f"/api/goals/{goal_id}")
 
+    # === Export ===
+    def get_export_url(self) -> str:
+        return f"{self.base_url}/api/export"
+
     # === ML Dataset ===
     def get_ml_dataset(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
         params = {}
@@ -100,6 +106,10 @@ class APIClient(BaseHTTPClient):
         if end_date:
             params["end_date"] = end_date.isoformat()
         return self._get("/api/ml/dataset", params=params)
+
+    # === Telegram Bot ===
+    def send_telegram_test_reminder(self) -> Dict[str, Any]:
+        return self._post("/api/telegram/test-reminder", json_data={})
 
     # === Nutrition & Meals ===
     def get_nutrition_logs(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
@@ -123,7 +133,12 @@ class APIClient(BaseHTTPClient):
         self._delete(f"/api/nutrition/{log_date.isoformat()}")
 
     # === Medical Tests ===
-    def get_medical_tests(self, start_date: Optional[date] = None, end_date: Optional[date] = None, test_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_medical_tests(
+        self,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+        test_name: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         params = {}
         if start_date:
             params["start_date"] = start_date.isoformat()
@@ -161,11 +176,15 @@ class APIClient(BaseHTTPClient):
     def get_experiment_days(self, experiment_id: int) -> List[Dict[str, Any]]:
         return self._get(f"/api/experiments/{experiment_id}/days")
 
-    def log_experiment_day(self, experiment_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    def upsert_experiment_day(self, experiment_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
         return self._post(f"/api/experiments/{experiment_id}/days", json_data=data)
 
-    def delete_experiment_day(self, experiment_id: int, date_val: date) -> None:
-        self._delete(f"/api/experiments/{experiment_id}/days/{date_val.isoformat()}")
+    def log_experiment_day(self, experiment_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        return self.upsert_experiment_day(experiment_id, data)
+
+    def delete_experiment_day(self, experiment_id: int, date_val_or_str: Any) -> None:
+        date_str = date_val_or_str.isoformat() if hasattr(date_val_or_str, 'isoformat') else str(date_val_or_str)
+        self._delete(f"/api/experiments/{experiment_id}/days/{date_str}")
 
     def analyze_experiment(self, experiment_id: int) -> Dict[str, Any]:
         return self._get(f"/api/experiments/{experiment_id}/analyze")
@@ -173,6 +192,9 @@ class APIClient(BaseHTTPClient):
     def get_baseline_stats(self, metric_source: str, metric_name: str) -> Dict[str, Any]:
         params = {"metric_source": metric_source, "metric_name": metric_name}
         return self._get("/api/experiments/helpers/baseline-stats", params=params)
+
+    def get_metric_baseline_stats(self, metric_source: str, metric_name: str) -> Dict[str, Any]:
+        return self.get_baseline_stats(metric_source, metric_name)
 
     # === Strength Workouts ===
     def get_strength_workouts(self, start_date: Optional[date] = None, end_date: Optional[date] = None) -> List[Dict[str, Any]]:
@@ -192,6 +214,9 @@ class APIClient(BaseHTTPClient):
     def import_workouts_csv(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
         files = {"file": (filename, file_bytes, "text/csv")}
         return self._post("/api/strength-workouts/import", files=files)
+
+    def import_strength_workouts_csv(self, file_bytes: bytes, filename: str) -> Dict[str, Any]:
+        return self.import_workouts_csv(file_bytes, filename)
 
     # === Spontaneous Notes ===
     def create_spontaneous_note(self, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -235,3 +260,5 @@ class APIClient(BaseHTTPClient):
 
     def delete_agent_insight(self, insight_id: int) -> None:
         self._delete(f"/api/agent-insights/{insight_id}")
+
+api_client = APIClient()
