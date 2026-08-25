@@ -1,18 +1,35 @@
 import io
+import os
 import zipfile
+import logging
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 import pandas as pd
 
-from fastapi.staticfiles import StaticFiles
-import os
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='{"time":"%(asctime)s", "level":"%(levelname)s", "name":"%(name)s", "message":"%(message)s"}'
+)
+logger = logging.getLogger("personal_analytics")
 
 from backend.app.database import engine, Base, get_db
 from backend.app.routers import daily_logs, finances, metrics, learning, goals, ml, telegram, nutrition, medical_tests, experiments, strength_workouts, agent_insights, meals, notes
 
 app = FastAPI(title="Personal Analytics API", version="1.0.0")
+
+# Instrument Prometheus metrics
+try:
+    from prometheus_fastapi_instrumentator import Instrumentator
+    Instrumentator().instrument(app).expose(app)
+except ImportError:
+    pass
+
+
 
 @app.on_event("startup")
 def on_startup():
